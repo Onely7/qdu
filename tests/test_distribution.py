@@ -46,7 +46,7 @@ class DistributionArtifactTest(unittest.TestCase):
         result = subprocess.run(
             [str(artifact), "--version"], text=True, capture_output=True, check=True
         )
-        self.assertIn("qdu 0.0.1", result.stdout)
+        self.assertIn(f"qdu {__version__}", result.stdout)
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             root = base / "root"
