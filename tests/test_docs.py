@@ -9,16 +9,16 @@ MARKDOWN_LINK = re.compile(r"(?<!!)\[[^]]*]\(([^)]+)\)")
 
 
 class DocumentationTest(unittest.TestCase):
-    def test_every_japanese_document_has_an_english_peer(self) -> None:
-        self.assertTrue((PROJECT_ROOT / "README_en.md").is_file())
-        for japanese_path in (PROJECT_ROOT / "docs").glob("*.md"):
-            if japanese_path.stem.endswith("_en"):
+    def test_every_primary_english_document_has_a_japanese_peer(self) -> None:
+        self.assertTrue((PROJECT_ROOT / "README_ja.md").is_file())
+        for english_path in (PROJECT_ROOT / "docs").glob("*.md"):
+            if english_path.stem.endswith("_ja"):
                 continue
-            english_path = japanese_path.with_name(f"{japanese_path.stem}_en.md")
-            self.assertTrue(english_path.is_file(), english_path)
+            japanese_path = english_path.with_name(f"{english_path.stem}_ja.md")
+            self.assertTrue(japanese_path.is_file(), japanese_path)
 
     def test_local_markdown_links_resolve(self) -> None:
-        documents = [PROJECT_ROOT / "README.md", PROJECT_ROOT / "README_en.md"]
+        documents = [PROJECT_ROOT / "README.md", PROJECT_ROOT / "README_ja.md"]
         documents.extend((PROJECT_ROOT / "docs").glob("*.md"))
         for document in documents:
             for raw_target in MARKDOWN_LINK.findall(

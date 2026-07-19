@@ -1,26 +1,27 @@
-# qdu ドキュメント
+# qdu documentation
 
-[English](README_en.md) | 日本語
+English | [日本語](README_ja.md)
 
-READMEには、インストールと最初の操作に必要な情報だけをまとめています。詳しい説明は、目的ごとに次の文書へ分けています。
+## Start here
 
-## 初めて使う
+1. [Getting started](GETTING_STARTED.md)
+2. [Snapshots and scanning](SNAPSHOTS_AND_SCANNING.md)
+3. [Analysis guide](ANALYSIS_GUIDE.md)
 
-1. [導入ガイド](GETTING_STARTED.md)
-2. [スナップショットと走査範囲](SNAPSHOTS_AND_SCANNING.md)
-3. [分析ガイド](ANALYSIS_GUIDE.md)
+## Configure and operate
 
-## 設定・運用を行う
+- [Configuration and storage](CONFIGURATION_AND_STORAGE.md)
+- [Operations and maintenance](OPERATIONS.md)
+- [Weekly snapshots with tmux](QDU_TMUX_WEEKLY_SNAPSHOT_GUIDE.md)
 
-- [設定と保存場所](CONFIGURATION_AND_STORAGE.md)
-- [運用と保守](OPERATIONS.md)
-- [tmuxを使った週次実行](QDU_TMUX_WEEKLY_SNAPSHOT_GUIDE.md)
+## Diagnose or look up syntax
 
-## 困ったときに確認する
+- [Troubleshooting](TROUBLESHOOTING.md)
+- [Command reference](COMMAND_REFERENCE.md)
 
-- [トラブルシューティング](TROUBLESHOOTING.md)
-- [コマンドリファレンス](COMMAND_REFERENCE.md)
+## Contribute
 
-## 開発に参加する
+- [Development guide](DEVELOPMENT.md)
 
-- [開発者向けガイド](DEVELOPMENT.md)
+Return to the [English project README](../README.md).
+

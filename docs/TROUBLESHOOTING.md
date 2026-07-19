@@ -1,59 +1,66 @@
-# トラブルシューティング
+# Troubleshooting
 
-[English](TROUBLESHOOTING_en.md) | 日本語
+English | [日本語](TROUBLESHOOTING_ja.md)
 
-qduの実行中に起こりやすい問題と確認手順をまとめています。
-
-## よくある問題
-
-#### `qdu: command not found`
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-ファイルも確認します。
+## `qdu: command not found`
 
 ```bash
 ls -l "$HOME/.local/bin/qdu"
+export PATH="$HOME/.local/bin:$PATH"
+qdu --version
 ```
 
-#### `no snapshots are available`
+Persist the PATH change in `~/.bashrc` or `~/.zshrc`.
+
+## `no snapshots are available`
+
+Take a snapshot with the same profile used by the query:
 
 ```bash
-qdu snapshot
+qdu snapshot --profile data
+qdu show --profile data
 ```
 
-プロファイルを使っている場合は、取得と表示で同じ名前を指定します。
+## `no complete snapshot is available`
 
-#### `no complete snapshot is available`
+Inspect the newest incomplete result and its captured errors:
 
 ```bash
 qdu show --snapshot latest-any
 qdu errors --snapshot latest-any
 ```
 
-#### `profile ... is already bound to ...`
+Correct permissions, exclusions, or mount scope, then take another snapshot.
 
-別の走査ルートには、別のプロファイルを作ります。
+## Invalid profile name
+
+Names are identifiers, not paths. Use alphanumerics, `.`, `_`, and `-`. qdu intentionally rejects absolute paths, `..`, and separators before reading or deleting profile files.
+
+```bash
+qdu profile add project-data --path /srv/project-data
+```
+
+If an old hand-edited config has an invalid section name, rename it to a valid profile identifier and run `qdu doctor`.
+
+## Profile already bound to another root
+
+qdu does not silently repurpose stored history. Create another profile:
 
 ```bash
 qdu profile add another-data --path /another/data
 ```
 
-#### `qdu browse` が使えない
-
-`fzf` があるか確認します。
+## `qdu browse` is unavailable
 
 ```bash
 command -v fzf
 ```
 
-`fzf` がなくても、`qdu show` と `qdu explain` は使用できます。
+Install `fzf`, or use `qdu show` and `qdu explain PATH`. qdu executes only the resolved `fzf` binary without a shell.
 
-#### `/home` を指定すると、すぐに終わって `0B` になる
+## `/home` completes immediately with `0B`
 
-`/home` がautofsで、各ユーザーのホームディレクトリがNFSとして個別にマウントされている可能性があります。確認します。
+Autofs or NFS children may have different device IDs and are skipped by the one-filesystem default.
 
 ```bash
 findmnt -T /home
@@ -61,48 +68,48 @@ findmnt -R /home | head -n 100
 stat -c 'path=%n device=%d' /home /home/"$USER"
 ```
 
-`/home` と `/home/$USER` のデバイス番号が異なる場合、既定のqduは別ファイルシステムとして読み飛ばします。プロファイルを次のように作成してください。
+If those paths are intended scan targets:
 
 ```bash
-qdu profile add shared-home \
-  --path /home \
-  --cross-filesystems \
-  --with-users
-
+qdu profile add shared-home --path /home --cross-filesystems --with-users
 qdu snapshot --profile shared-home
 ```
 
-既存のプロファイル設定を変えず、今回だけ試す場合：
+## Values differ from `du` or a file manager
 
-```bash
-qdu snapshot --profile home --cross-filesystems
-```
-
-反対に、プロファイルでは有効だが今回だけ境界を越えたくない場合：
-
-```bash
-qdu snapshot --profile home --one-file-system
-```
-
-#### `du` やファイルマネージャーと容量が違う
-
-次の違いが影響します。
-
-- 割り当て済み容量と見かけ上のサイズ
-- 除外パターン
-- 読み取り権限
-- 別ファイルシステム
-- ハードリンクの重複除外
-- スナップショット取得後の変更
-
-見かけ上のサイズで比較する場合：
+Check allocated versus apparent size, exclusions, unreadable paths, mount boundaries, hard-link deduplication, and changes since snapshot creation.
 
 ```bash
 qdu show --metric apparent_bytes
+qdu errors --snapshot latest-any
+qdu config show
 ```
 
-#### 深いディレクトリが表示されない
+## Deep directories are absent
 
-`--max-depth`、`--under`、`--match`、`--min-size` と、取得時の `--record-max-depth` を確認してください。
+Review query filters (`--max-depth`, `--under`, `--match`, `--min-size`) and the collection-time `record_max_depth`. Data below the recorded depth requires a new snapshot.
 
-`--record-max-depth` より深い情報は保存されていないため、必要な深さでスナップショットを取り直す必要があります。
+## Verification or index failure
+
+Do not delete files first. Preserve the state directory, then run:
+
+```bash
+qdu doctor
+qdu verify --all
+qdu repair --dry-run
+```
+
+An index that references a parent path, absolute path, arbitrary extension, or nested filename is rejected before any referenced file operation. If valid databases remain under `snapshots/`, `qdu repair` can reconstruct the index.
+
+## Stale lock
+
+Use `qdu doctor` to distinguish an active process from stale metadata. Only then run:
+
+```bash
+qdu unlock --profile data
+```
+
+## Unexpected output in scripts
+
+Use `--format json` or `--format tsv` and check the exit code. Do not parse colored tables. For human terminal output, qdu escapes control characters so stored path data cannot emit terminal control sequences.
+

@@ -1,111 +1,80 @@
-# 運用と保守
+# Operations and maintenance
 
-[English](OPERATIONS_en.md) | 日本語
+English | [日本語](OPERATIONS_ja.md)
 
-長期運用に必要な検証、修復、圧縮、しきい値判定、定期実行を説明します。
-
-## 検証・修復・圧縮
-
-#### 環境を診断する
-
-```bash
-qdu doctor
-```
-
-Python・SQLite、設定、状態ディレクトリ、走査ルート、ロック、インデックス、空き容量を確認します。
-
-#### スナップショットを検証する
+## Verify and diagnose
 
 ```bash
 qdu verify
-qdu verify --all
+qdu verify --snapshot latest
+qdu doctor
+qdu doctor --profile data
 ```
 
-SHA-256、SQLite整合性、保存件数、スナップショットIDを確認します。
+`verify` checks the indexed file, checksum, gzip materialization, SQLite integrity, schema version, and stored invariants. `doctor` reports configuration, state-directory, index, snapshot, and lock health.
 
-#### インデックスを修復する
+## Repair
+
+Preview recovery before replacing an index:
 
 ```bash
 qdu repair --dry-run
 qdu repair
 ```
 
-実在するスナップショットから `index.json` を再構築します。壊れたスナップショットは削除せず、読み飛ばした理由を表示します。
+Repair scans only valid snapshot basenames under the profile's snapshot directory, validates candidate databases, reconstructs records, and atomically saves a new index. Invalid or unrelated files are not imported.
 
-#### 残ったロック情報を削除する
+## Compact old snapshots
 
 ```bash
-qdu unlock
+qdu compact --older-than 30d --keep-latest 5
 ```
 
-別のqdu処理が実行中の場合は解除できません。通常、プロセス終了時にOSがロックを解放します。
+Compaction preserves protected recent and selector snapshots, creates `.sqlite3.gz` atomically, updates the checksum and index, and then removes the uncompressed source.
 
-#### 古いスナップショットを圧縮する
+## Locks
+
+Mutating operations use an owner-scoped profile lock. If a process is still active, qdu refuses concurrent mutation. Inspect with `qdu doctor`; remove metadata only after confirming it is stale:
 
 ```bash
-qdu compact --older-than 30d
-qdu compact --older-than 30d --keep-latest 3
-qdu compact --older-than 30d --dry-run
+qdu unlock --profile data
 ```
 
-圧縮済みスナップショットも `show`、`diff`、`verify` などから利用できます。
+## Automation checks
 
-## しきい値チェック
+`qdu check` evaluates one or more policies and returns a distinct alert status when a threshold is exceeded:
 
 ```bash
-qdu check --growth-over 10GiB
-qdu check --path Library/Caches --growth-over 2GiB
+qdu check --growth-over 10GiB --path data
 qdu check --disk-usage-over 85
-qdu check --inode-usage-over 90
+qdu check --inode-usage-over 80
+qdu check --snapshot-age-over 8d
 qdu check --capacity-limit 2TiB
-qdu check --capacity-limit 2TiB --capacity-user daiki
 ```
 
-複数条件も指定できます。
+Owner-specific capacity checks require a snapshot collected with `--with-users`.
+
+## Scheduling
+
+Use a user-level scheduler and retain logs. A typical job takes a snapshot and then verifies it:
 
 ```bash
-qdu check \
-  --growth-over 10GiB \
-  --disk-usage-over 85 \
-  --inode-usage-over 90
+qdu snapshot --profile data --quiet && qdu verify --profile data
 ```
 
-しきい値を超えると終了コード `10` になります。`--growth-over` には完全なスナップショットが2つ以上必要です。プロファイルに許容量を保存している場合、`qdu check --profile NAME` だけでも許容量を判定します。
+Do not overlap jobs for the same profile. qdu's lock will prevent corruption, but repeated overlaps indicate a scheduling problem. See [Weekly snapshots with tmux](QDU_TMUX_WEEKLY_SNAPSHOT_GUIDE.md) when cron or a service manager is unavailable.
 
-## 定期実行
+## Exit codes
 
-#### cronを使える場合
-
-毎日午前3時に`home`プロファイルを記録する例：
-
-```cron
-0 3 * * * "$HOME/.local/bin/qdu" snapshot --profile home --quiet
-```
-
-`--quiet`は、完全に成功した場合の標準出力だけを抑えます。不完全な場合は警告を標準エラーへ出し、終了コード`3`を返します。
-
-#### cronを使えない場合
-
-tmuxセッションを動かし続けられる環境では、シェルスクリプトと`sleep`を組み合わせて定期実行できます。
-
-`--profile`を指定しない例と、`--profile shared-home`を指定する例は、次の文書にまとめています。
-
-[tmuxを使ってqduを1週間ごとに定期実行する](QDU_TMUX_WEEKLY_SNAPSHOT_GUIDE.md)
-
-サーバーが再起動した場合や、tmuxサーバーが終了した場合は、tmuxセッションを起動し直す必要があります。
-
-`qdu check`を通知処理へ組み込む場合は、終了コード`10`と、それ以外のエラーを分けて扱ってください。
-
-## 終了コード
-
-| コード | 意味 |
+| Code | Meaning |
 |---:|---|
-| `0` | 成功 |
-| `1` | 一般的な実行エラー |
-| `2` | 引数・設定エラー |
-| `3` | 不完全なスナップショットを保存 |
-| `4` | スナップショット・インデックス形式エラー |
-| `5` | 同じプロファイルで別のqdu処理が実行中 |
-| `6` | 検証エラー |
-| `10` | しきい値超過 |
-| `130` | `Ctrl+C` による中断 |
+| `0` | Successful command; checks passed |
+| `1` | Operational or unexpected failure |
+| `2` | Invalid CLI usage, configuration, selector, or input boundary |
+| `3` | A snapshot was saved but is incomplete |
+| `4` | Malformed or incompatible stored snapshot/index data |
+| `5` | Busy profile or another process owns the lock |
+| `6` | Integrity verification failed |
+| `10` | A requested `check` threshold was exceeded |
+
+Scripts should test the exact documented code instead of parsing human-readable messages. Use JSON or TSV for data interchange.

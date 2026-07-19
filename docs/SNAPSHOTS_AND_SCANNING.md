@@ -1,122 +1,88 @@
-# スナップショットと走査範囲
+# Snapshots and scanning scope
 
-[English](SNAPSHOTS_AND_SCANNING_en.md) | 日本語
+English | [日本語](SNAPSHOTS_AND_SCANNING_ja.md)
 
-スナップショット取得時の設定、読み取り権限、除外パターン、マウントポイントの扱いを説明します。
-
-## スナップショットを取得する
-
-基本形：
+## Take a snapshot
 
 ```bash
 qdu snapshot
-```
-
-名前付きプロファイルを使う場合：
-
-```bash
+qdu snapshot --path /srv/data
 qdu snapshot --profile data
 ```
 
-ユーザー別統計や大容量ファイル候補も保存する例：
+A profile is bound to its first persisted root. qdu refuses to silently change that root; create another profile for another tree.
+
+Useful collection options are:
 
 ```bash
-qdu snapshot \
-  --profile data \
-  --with-users \
-  --user-max-depth 3 \
-  --file-top 2000 \
-  --exclude '.cache' \
-  --exclude 'node_modules'
+qdu snapshot --with-users
+qdu snapshot --record-max-depth 6
+qdu snapshot --file-top 2000
+qdu snapshot --exclude .cache --exclude '*.tmp'
+qdu snapshot --exclude-from ~/.config/qdu/excludes
 ```
 
-コマンドラインで指定しなかった項目には、プロファイル設定または既定値が使われます。全オプションと既定値は、後半の[`qdu snapshot`オプション一覧](COMMAND_REFERENCE.md#qdu-snapshot)で確認できます。
+`--with-users` records aggregate owner information. `--record-max-depth` limits stored directory detail, not filesystem traversal. `--file-top` controls how many large-file candidates are retained.
 
-#### `--record-max-depth` の注意
+## Complete and incomplete snapshots
 
-このオプションは、スナップショットへ保存するディレクトリ行の深さを制限します。深い場所の容量も親の合計には含まれますが、制限より深いディレクトリは個別に表示できません。
-
-容量計算のために配下は走査するため、走査時間が大幅に短くなるとは限りません。
-
-#### 読み取れない場所がある場合
-
-一般ユーザーでは、一部のディレクトリを読めないことがあります。qduは読めた範囲を**不完全なスナップショット**として保存します。
-
-- 終了コード：`3`
-- 状態：`incomplete`
-- `latest-any`：更新される
-- 最新の完全な結果を指す `latest`：更新されない
-
-不完全な結果を見る場合：
+Unreadable paths are recorded as scan errors. A snapshot with such errors remains available through `latest-any`, while `latest` continues to select the most recent complete snapshot.
 
 ```bash
-qdu show --snapshot latest-any
+qdu list
 qdu errors --snapshot latest-any
+qdu show --snapshot latest-any
 ```
 
-通常はsudoを付けず、一般ユーザーとして実行してください。sudoで実行すると、状態ファイルがroot所有になり、普段のユーザーから扱いにくくなることがあります。
+Fatal failures clean up the temporary database and do not publish a snapshot.
 
-#### 走査範囲とマウントポイント
+## Filesystem boundaries
 
-既定では、走査ルートと同じファイルシステム内だけを走査します。配下に別のディスク、NFS、autofsなどがマウントされていても、その中へは入りません。意図せず巨大な共有領域まで走査することを防ぐためです。
-
-別のファイルシステムも含める場合は、明示的に `--cross-filesystems` を指定します。
+The default is one filesystem. Mounted child trees are skipped and reported:
 
 ```bash
-qdu snapshot --profile shared-home --cross-filesystems
+qdu snapshot --one-file-system
 ```
 
-プロファイルへ保存して毎回有効にすることもできます。
+Use cross-filesystem mode when the intended dataset spans mounts, such as autofs-managed NFS home directories:
 
 ```bash
-qdu profile add shared-home \
-  --path /home \
-  --cross-filesystems \
-  --with-users
-
-qdu snapshot --profile shared-home
+qdu snapshot --cross-filesystems
 ```
 
-例えば `/home` 自体が `autofs` で、`/home/alice` や `/home/bob` が個別のNFSマウントになっている環境では、既定のままだと各ホームディレクトリを走査しません。その場合、結果が `Directories 1`、`Files 0`、`Allocated 0B` になることがあります。`--cross-filesystems` を付けると、それらのマウント先へ入ります。
+Persist the choice in a profile:
 
-ただし、一般ユーザーが読み取れないホームディレクトリは走査できません。読める範囲は保存され、結果は `incomplete` になります。sudoを使わず、`qdu errors --snapshot latest-any` で読めなかった場所を確認してください。
+```bash
+qdu profile add shared-home --path /home --cross-filesystems --with-users
+```
 
-> [!CAUTION]
-> `--cross-filesystems` は、走査ルート配下にある**すべての別ファイルシステム**を対象にします。NFSや応答の遅いマウントが含まれると、取得に時間がかかることがあります。まず対象範囲を `findmnt -R PATH` などで確認してください。
+Crossing mounts can substantially increase scan time and network traffic. Verify the mount layout first with tools such as `findmnt`, `mount`, and `stat`.
 
-その他の規則：
+## Exclusion patterns
 
-- シンボリックリンクはリンク自体を数え、リンク先はたどりません
-- ハードリンクはデバイス番号とinode番号で重複除外します
-- 別ファイルシステムを読み飛ばした場合、スナップショット取得時と `qdu show` に件数を表示します
-- `--cross-filesystems` で複数のファイルシステムを走査した場合、容量欄は重複しないデバイスごとの値を合計して表示します
-
-## 除外パターン
+Patterns are matched against a relative path and its basename. Plain names such as `.git` match a component; glob syntax supports `*`, `?`, and character classes.
 
 ```bash
 qdu snapshot \
-  --exclude '.git' \
-  --exclude 'node_modules' \
-  --exclude '*.tmp'
+  --exclude .git \
+  --exclude node_modules \
+  --exclude 'cache/**'
 ```
 
-除外規則は、ディレクトリ容量、ユーザー集計、大容量ファイル候補で共通です。
+An exclusion file contains one pattern per line. Blank lines and lines beginning with `#` are ignored.
 
-- `/` を含まないパターン：どの階層のパス要素にも一致
-- `/` を含むパターン：走査ルートからの相対パス全体に一致
-- `*`、`?`、`[abc]` を使用可能
-
-| パターン | 一致例 |
-|---|---|
-| `cache` | `cache/file`、`a/cache/file` |
-| `*.tmp` | `a.tmp`、`work/a.tmp` |
-| `models/*.bin` | `models/model.bin` |
-| `**/cache/**` | 各階層の `cache` 配下 |
-
-ファイルから読み込む場合：
-
-```bash
-qdu snapshot --exclude-from "$HOME/.config/qdu/excludes"
+```text
+# build outputs
+node_modules
+.venv
+*.tmp
 ```
 
-空行と `#` で始まる行は無視されます。
+The scanner uses the same exclusion contract for directory, owner, and large-file statistics. Hard-linked regular files are counted once per scan to avoid double-counting allocated blocks.
+
+## Permissions and changes during scanning
+
+Run qdu as the user whose accessible view you want to measure. Do not schedule it with `sudo` merely to suppress permission errors. Files can change while walking; recoverable failures make the result incomplete and remain inspectable with `qdu errors`.
+
+Continue with the [Analysis guide](ANALYSIS_GUIDE.md).
+

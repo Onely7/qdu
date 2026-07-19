@@ -1,214 +1,88 @@
-# qdu 導入ガイド
+# Getting started with qdu
 
-[English](GETTING_STARTED_en.md) | 日本語
+English | [日本語](GETTING_STARTED_ja.md)
 
-インストールから最初の差分確認までを説明します。
+## Requirements
 
-## 動作環境
-
-- LinuxまたはmacOS
-- Python 3.10以上
-- 追加のPythonパッケージは不要
-
-Pythonのバージョンは、次のコマンドで確認できます。
+qdu supports Linux and macOS with Python 3.10 through 3.14. Runtime operation uses only the Python standard library. `fzf` is optional and used only by `qdu browse`.
 
 ```bash
 python3 --version
 ```
 
-`qdu browse`を使う場合だけ、別途[`fzf`](https://github.com/junegunn/fzf)が必要です。
+## Build and install
 
-## インストール
-
-#### 配布された`qdu`を使う
-
-配布用の実行ファイルは`dist/qdu`です。一般ユーザーが書き込める`~/.local/bin`へ配置します。
+From a checkout:
 
 ```bash
-mkdir -p "$HOME/.local/bin"
-install -m 755 ./dist/qdu "$HOME/.local/bin/qdu"
-```
-
-インストールできたか確認します。
-
-```bash
-command -v qdu
-qdu --version
-```
-
-`command -v qdu`で何も表示されない場合は、`~/.local/bin`が`PATH`に含まれていません。まず、現在のターミナルで追加します。
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-次回からも有効にするには、使用中のシェルに合わせて設定ファイルへ追記してください。
-
-```bash
-# Bash
-printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-
-# Zsh
-printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
-```
-
-新しいターミナルを開いたあと、動作を確認します。
-
-```bash
-qdu --version
-qdu doctor
-```
-
-#### インストールスクリプトを使う
-
-リポジトリのルートで実行します。
-
-```bash
+make build
+./dist/qdu --version
 ./install.sh
 ```
 
-既定では`~/.local/bin/qdu`へインストールされます。別の場所へ入れる場合は、`QDU_INSTALL_DIR`を指定します。
+The installer copies the generated zipapp to `~/.local/bin/qdu`. If the command is not found, add that directory to your shell path:
 
 ```bash
-QDU_INSTALL_DIR="$HOME/bin" ./install.sh
+# Bash: add to ~/.bashrc; Zsh: add to ~/.zshrc
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-#### 配布用の単一実行ファイルをビルドする
+You may instead install directly:
 
 ```bash
-python3 tools/build_zipapp.py
+mkdir -p "$HOME/.local/bin"
+install -m 755 dist/qdu "$HOME/.local/bin/qdu"
 ```
 
-生成先：
+## The first three commands
 
-```text
-dist/qdu
-```
-
-仮想環境や`pip install`は必要ありません。
-
-## まずは3つのコマンドを試す
-
-#### 1. 現在の状態を記録する
+Record your home directory, inspect the ranking, and later compare it with a second complete snapshot:
 
 ```bash
 qdu snapshot
-```
-
-何も指定しない場合は、自分のホームディレクトリを走査します。
-
-qduが保存するのは、容量、ファイル数、inode数、取得日時などの情報です。ファイルの内容そのものはコピーしません。
-
-#### 2. 容量ランキングを見る
-
-```bash
 qdu show
-```
 
-深さ2までの上位30件を見る場合：
-
-```bash
-qdu show --max-depth 2 --top 30
-```
-
-引数なしの`qdu`も、`qdu show`と同じ動作です。
-
-#### 3. 後でもう一度記録し、差分を見る
-
-```bash
+# Run after files have changed.
 qdu snapshot
 qdu diff
 ```
 
-増えた場所だけを見る場合：
+Useful refinements include:
 
 ```bash
+qdu show --max-depth 3 --top 50
+qdu show --under Library/Caches
 qdu diff --growth-only
+qdu list
 ```
 
-`qdu diff`には、完全なスナップショットが2つ以上必要です。
+## Terminology
 
-## 基本用語
+- A **profile** names one scan root and its saved defaults. `default` uses the current user's home unless configured otherwise.
+- A **snapshot** is an immutable SQLite database of measurements and paths. It does not copy file contents.
+- A **complete snapshot** had no recoverable scan errors and can become `latest`.
+- An **incomplete snapshot** is retained as `latest-any` for inspection, but does not replace the most recent complete snapshot.
+- **Allocated bytes** approximate consumed filesystem blocks; **apparent bytes** are logical file sizes.
 
-#### スナップショット
-
-ある時点の容量、ファイル数、inode数、取得日時などを保存したものです。
-
-qduは、スナップショットをSQLiteデータベースとしてユーザー領域へ保存します。SQLiteサーバーを起動する必要はありません。
-
-#### プロファイル
-
-走査対象と設定をまとめる名前です。
-
-```text
-default      → /home/alice
-project-data → /data/project
-shared-home  → /home
-```
-
-`--profile`を指定しない場合は、`default`プロファイルが使われます。
-
-1つのプロファイルは、1つの走査ルートに対応します。異なる場所を管理する場合は、プロファイルを分けてください。
-
-#### 割り当て済み容量と見かけ上のサイズ
-
-- **割り当て済み容量**：ファイルシステム上で実際に割り当てられた容量。qduの既定値
-- **見かけ上のサイズ**：アプリケーションから見えるファイルサイズ
-
-スパースファイル、圧縮、コピーオンライトなどがあると、両者は一致しないことがあります。
-
-#### inode
-
-ファイルやディレクトリを管理するために、ファイルシステムが使う情報です。
-
-小さなファイルが大量にある場合、空き容量が残っていてもinodeが先に不足することがあります。
-
-#### 運用上の許容量
-
-実際のファイルシステム容量とは別に、管理者やチームから「このユーザーは2TBまで」と指示されることがあります。
-
-qduでは、この上限を**運用上の許容量**として指定できます。OSやストレージ側のquotaは変更せず、qduが記録した使用量と比較して、使用率や超過量を表示します。
-
-## 複数の走査対象を管理する
-
-1つのプロファイルは1つの走査ルートに対応します。最初のスナップショットを取得したあと、同じプロファイルで別のルートを指定するとエラーになります。
-
-複数のルートを扱う場合は、プロファイルを分けてください。
+## Create another profile
 
 ```bash
-qdu profile add home --path "$HOME"
-qdu profile add data --path /data/my-project
+qdu profile add data --path /srv/data --keep-snapshots 60
+qdu snapshot --profile data
+qdu show --profile data
+```
 
-# /home が autofs で、各ユーザーのホームが別マウントの場合
+Profile names are deliberately restricted to safe filename components. Use letters, digits, `.`, `_`, or `-`; do not use an absolute path, `..`, `/`, or `\`.
+
+If children of the root are separate mounts, opt in to crossing filesystem boundaries:
+
+```bash
 qdu profile add shared-home \
   --path /home \
   --cross-filesystems \
   --with-users
+qdu snapshot --profile shared-home
 ```
 
-```bash
-qdu snapshot --profile data
-qdu show --profile data
-qdu diff --profile data
-```
+Continue with [Snapshots and scanning](SNAPSHOTS_AND_SCANNING.md), then use the [Analysis guide](ANALYSIS_GUIDE.md).
 
-登録内容を確認します。
-
-```bash
-qdu profile list
-qdu profile show data
-```
-
-設定だけを削除：
-
-```bash
-qdu profile remove data
-```
-
-設定とスナップショットを削除：
-
-```bash
-qdu profile remove data --delete-data
-```
-
-`--delete-data` で削除したスナップショットは元に戻せません。
