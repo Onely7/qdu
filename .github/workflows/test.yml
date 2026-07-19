@@ -1,0 +1,57 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Compile Python sources
+        run: python -m compileall -q src tools tests
+      - name: Run test suite
+        run: tests/run_tests.sh
+
+  quality:
+    name: Static and distribution checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install development tools
+        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+      - name: Run Ruff checks
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Run ShellCheck
+        run: shellcheck install.sh tests/run_tests.sh tools/benchmark.sh
+      - name: Smoke-test zipapp
+        run: |
+          python tools/build_zipapp.py
+          ./dist/qdu --version
+
