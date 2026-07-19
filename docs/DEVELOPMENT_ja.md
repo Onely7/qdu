@@ -41,6 +41,21 @@ RuffはPython 3.10を基準に、品質・セキュリティ・docstringの`D`�
 
 リポジトリ設定ではDependency graph、Dependabot alerts/security updatesを有効にしてください。CodeQL default setupが有効な場合は、ワークフローと競合しないようadvanced setupへ切り替えます。
 
+#### リリースとバージョンタグ
+
+Release Pleaseは、`main`へマージされたConventional Commitsから1つのRelease PRを継続的に更新します。Release PRには、推奨バージョン、`CHANGELOG.md`、`.release-please-manifest.json`、`src/qdu/_version.py`の更新と、前回リリース以降の変更一覧が含まれます。人間がRelease PRをマージすると、`v<version>`タグとGitHub Releaseが作成されます。
+
+PRはsquash mergeを使い、最終コミットをConventional Commit形式にします。
+
+- `fix: ...`はpatch releaseを提案します。
+- `feat: ...`はminor releaseを提案します。
+- `feat!: ...`または`BREAKING CHANGE:` footerはbreaking releaseを提案します。1.0より前のbreaking changeは`0.x`系列を維持します。
+- `docs:`、`test:`、`refactor:`、`ci:`は作業種別を記録しますが、それだけでfeature releaseを要求しません。
+
+Release設定は`release-please-config.json`と`.release-please-manifest.json`で管理します。実行時バージョンの唯一の定義は`src/qdu/_version.py`です。`x-release-please-version`注釈をgeneric updaterが更新します。bootstrap SHAより前の既存履歴は初回Release PRの対象外です。
+
+workflowはリポジトリの`GITHUB_TOKEN`へフォールバックします。このtokenで作成したPRやtagからは別のworkflowが起動しません。Release PR更新時のCIやtag作成イベントを起動する場合は、contentsとpull requestsへのwrite権限を持つfine-grained tokenをActions secret `RELEASE_PLEASE_TOKEN`として登録してください。tokenをGitへ追加してはいけません。
+
 #### ビルドとインストール
 
 ```bash

@@ -8,8 +8,35 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from qdu import __version__
+
 
 class DistributionArtifactTest(unittest.TestCase):
+    def test_release_manifest_matches_the_runtime_version(self) -> None:
+        project = Path(__file__).resolve().parents[1]
+        manifest = json.loads(
+            (project / ".release-please-manifest.json").read_text(encoding="utf-8")
+        )
+        config = json.loads(
+            (project / "release-please-config.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(manifest["."], __version__)
+        self.assertEqual(config["release-type"], "python")
+        self.assertFalse(config["include-component-in-tag"])
+        self.assertTrue(config["include-v-in-tag"])
+        self.assertIn(
+            {
+                "type": "generic",
+                "path": "src/qdu/_version.py",
+            },
+            config["packages"]["."]["extra-files"],
+        )
+        version_source = (project / "src" / "qdu" / "_version.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("x-release-please-version", version_source)
+
     def test_zipapp_is_the_tested_release_artifact(self) -> None:
         project = Path(__file__).resolve().parents[1]
         subprocess.run(

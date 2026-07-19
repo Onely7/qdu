@@ -48,11 +48,28 @@ make clean
 
 Repository administrators must enable Dependency graph, Dependabot alerts, and Dependabot security updates. If CodeQL default setup exists, switch it to advanced setup before merging the workflow to avoid duplicate configurations.
 
+## Releases and version tags
+
+Release Please maintains a single Release PR from Conventional Commits merged into `main`. The workflow proposes the next semantic version, updates `CHANGELOG.md`, `.release-please-manifest.json`, and `src/qdu/_version.py`, and lists changes since the previous release. Merging that Release PR creates a `v<version>` tag and the corresponding GitHub Release.
+
+Use squash-merge and give the resulting commit a Conventional Commit title:
+
+- `fix: ...` proposes a patch release.
+- `feat: ...` proposes a minor release.
+- `feat!: ...` or a `BREAKING CHANGE:` footer proposes a breaking release. Before 1.0, breaking changes remain on the `0.x` line.
+- `docs:`, `test:`, `refactor:`, and `ci:` describe non-feature work and do not independently force a feature release.
+
+Release state is configured by `release-please-config.json` and `.release-please-manifest.json`. The runtime version remains defined only in `src/qdu/_version.py`; the `x-release-please-version` annotation lets the generic updater modify that assignment. The bootstrap SHA excludes history that predates adoption of Release Please.
+
+The workflow falls back to the repository `GITHUB_TOKEN`. Pull requests and tags created with that token do not trigger additional workflows. To run CI on Release Please PR updates and tag-created events, configure a fine-grained `RELEASE_PLEASE_TOKEN` Actions secret with repository contents and pull-request write access. Never commit the token.
+
 ## Project layout
 
 ```text
 qdu/
-├── .github/                 CI, CodeQL, and Dependabot
+├── .github/                 CI, CodeQL, Dependabot, and releases
+├── .release-please-manifest.json
+├── release-please-config.json
 ├── docs/                    paired Japanese and English guides
 ├── src/qdu/
 │   ├── commands/            command facade and responsibility modules
