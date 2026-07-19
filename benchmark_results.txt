@@ -1,0 +1,5 @@
+Dataset: 200 directories, 10,000 files
+snapshot elapsed=1.36 sec max_rss=314532 KiB
+show elapsed=1.21 sec max_rss=312928 KiB
+second_snapshot elapsed=1.37 sec max_rss=315756 KiB
+diff elapsed=1.16 sec max_rss=312932 KiB

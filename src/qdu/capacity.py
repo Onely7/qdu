@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class CapacityPolicy:
+    limit_bytes: int
+    user: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.limit_bytes <= 0:
+            raise ValueError("capacity limit must be greater than zero")
+        if self.user is not None and not self.user.strip():
+            raise ValueError("capacity user must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class CapacityAssessment:
+    target: str
+    limit_bytes: int
+    used_bytes: int
+
+    @property
+    def usage_percent(self) -> float:
+        return self.used_bytes * 100 / self.limit_bytes
+
+    @property
+    def exceeded(self) -> bool:
+        return self.used_bytes > self.limit_bytes
+
+    @property
+    def remaining_bytes(self) -> int:
+        return max(0, self.limit_bytes - self.used_bytes)
+
+    @property
+    def excess_bytes(self) -> int:
+        return max(0, self.used_bytes - self.limit_bytes)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "target": self.target,
+            "limit_bytes": self.limit_bytes,
+            "used_bytes": self.used_bytes,
+            "usage_percent": self.usage_percent,
+            "remaining_bytes": self.remaining_bytes,
+            "excess_bytes": self.excess_bytes,
+            "exceeded": self.exceeded,
+        }
+
+
+def assess_capacity(*, target: str, limit_bytes: int, used_bytes: int) -> CapacityAssessment:
+    return CapacityAssessment(
+        target=target,
+        limit_bytes=limit_bytes,
+        used_bytes=max(0, used_bytes),
+    )
