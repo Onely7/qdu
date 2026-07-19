@@ -107,4 +107,3 @@ Profile names are restricted to alphanumerics plus `.`, `_`, and `-`; path synta
 ## Exit codes
 
 See [Operations and maintenance](OPERATIONS.md#exit-codes) for the stable exit-code contract.
-

@@ -112,4 +112,3 @@ qdu unlock --profile data
 ## Unexpected output in scripts
 
 Use `--format json` or `--format tsv` and check the exit code. Do not parse colored tables. For human terminal output, qdu escapes control characters so stored path data cannot emit terminal control sequences.
-

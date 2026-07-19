@@ -73,4 +73,3 @@ Snapshots are versioned SQLite databases. No database server is required. qdu cr
 The index version and SQLite schema version are separate compatibility contracts. Use `qdu verify` and `qdu doctor` before manual recovery. Prefer `qdu repair` over editing `index.json` by hand.
 
 See [Operations and maintenance](OPERATIONS.md) for lifecycle commands.
-

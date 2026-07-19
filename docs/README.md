@@ -24,4 +24,3 @@ English | [日本語](README_ja.md)
 - [Development guide](DEVELOPMENT.md)
 
 Return to the [English project README](../README.md).
-

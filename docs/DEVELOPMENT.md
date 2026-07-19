@@ -88,4 +88,3 @@ For structural work, measure the pre-split, post-split, and final revisions five
 - Resolve optional executables to absolute paths and never invoke a shell.
 - Prefer explicit runtime validation to control-flow `assert` statements.
 - Explain hard-link handling, mount boundaries, durability, atomic replacement, and terminal escaping with concise reason comments.
-

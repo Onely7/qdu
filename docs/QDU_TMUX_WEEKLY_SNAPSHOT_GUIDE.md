@@ -95,4 +95,3 @@ If the session disappears immediately, run the script in the foreground and insp
 - Rotate or otherwise manage the log for long-running use.
 
 See [Operations and maintenance](OPERATIONS.md) for verification, compaction, and stable exit codes.
-

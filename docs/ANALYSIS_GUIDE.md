@@ -129,4 +129,3 @@ qdu show --format json
 Use JSON or TSV for automation. Control characters in terminal cells are escaped so stored paths cannot inject terminal escape sequences. JSON preserves the original string value.
 
 See the [Command reference](COMMAND_REFERENCE.md) for option defaults.
-

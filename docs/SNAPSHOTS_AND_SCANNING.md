@@ -85,4 +85,3 @@ The scanner uses the same exclusion contract for directory, owner, and large-fil
 Run qdu as the user whose accessible view you want to measure. Do not schedule it with `sudo` merely to suppress permission errors. Files can change while walking; recoverable failures make the result incomplete and remain inspectable with `qdu errors`.
 
 Continue with the [Analysis guide](ANALYSIS_GUIDE.md).
-

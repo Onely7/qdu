@@ -129,4 +129,3 @@ qdu validates profile path components and indexed snapshot basenames before file
 | [Weekly snapshots with tmux](docs/QDU_TMUX_WEEKLY_SNAPSHOT_GUIDE.md) | Scheduling without cron |
 
 Run `qdu --help` or `qdu <command> --help` for the authoritative options accepted by the installed version.
-
