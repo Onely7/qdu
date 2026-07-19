@@ -2,6 +2,8 @@
 
 English | [日本語](README_ja.md)
 
+<img src="images/qdu.png" width=85%>
+
 `qdu` (quick `du`) records directory usage as snapshots, so you can inspect rankings and changes without rescanning a large tree for every query.
 
 ```bash
