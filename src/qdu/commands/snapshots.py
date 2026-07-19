@@ -1,60 +1,14 @@
+"""Commands for creating, displaying, and comparing snapshots."""
+
 from __future__ import annotations
 
-import dataclasses
-import gzip
-import json
 import os
-import shutil
-import sqlite3
-import subprocess
-import sys
-import tempfile
 import time
 from argparse import Namespace
+from collections.abc import Sequence
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
-
-from qdu.capacity import CapacityAssessment, CapacityPolicy, assess_capacity
-from qdu.config import ConfigRepository, merge_profile_overrides
-from qdu.errors import BusyError, SnapshotFormatError, ThresholdExceeded, UsageError, VerificationError
-from qdu.live import largest_files_live
-from qdu.locking import ProfileLock, clear_stale_lock, inspect_lock
-from qdu.models import (
-    CheckResult,
-    DirectoryRecord,
-    DoctorItem,
-    FileRecord,
-    ProfileIndex,
-    SnapshotIndexRecord,
-)
-from qdu.patterns import PathPatternMatcher
-from qdu.query import (
-    SnapshotQueryService,
-    normalize_relative_path,
-    relative_to_scope,
-    resolve_user,
-)
-from qdu.render import RenderOptions, Renderer, TableCell, bar, percent
-from qdu.repository import SnapshotRepository
-from qdu.staleness import (
-    StaleLevel,
-    StaleThresholds,
-    assess_staleness,
-    stale_cutoff_epoch,
-)
-from qdu.storage import (
-    INDEX_VERSION,
-    IndexRepository,
-    ProfilePaths,
-    gzip_snapshot,
-    materialized_snapshot,
-    sha256_file,
-    validate_database,
-)
-from qdu.units import format_age, format_bytes, parse_duration, parse_size
-from qdu.scanner import username_for_uid
 
 from qdu.commands.capacity_support import (
     _capacity_assessment,
@@ -63,9 +17,33 @@ from qdu.commands.capacity_support import (
     _warn_capacity,
 )
 from qdu.commands.context import build_renderer, load_profile
+from qdu.config import ConfigRepository
+from qdu.models import (
+    DirectoryRecord,
+    SnapshotIndexRecord,
+)
+from qdu.query import (
+    SnapshotQueryService,
+    normalize_relative_path,
+    relative_to_scope,
+)
+from qdu.render import Renderer, TableCell, bar, percent
+from qdu.repository import SnapshotRepository
+from qdu.staleness import (
+    StaleLevel,
+    StaleThresholds,
+    assess_staleness,
+    stale_cutoff_epoch,
+)
+from qdu.storage import (
+    IndexRepository,
+    ProfilePaths,
+)
+from qdu.units import format_age, format_bytes, parse_duration, parse_size
 
 
 def snapshot_command(args: Namespace, config: ConfigRepository) -> int:
+    """Scan a profile root and persist a new snapshot."""
     renderer = build_renderer(args)
     profile = load_profile(args, config)
     repository = SnapshotRepository(profile)
@@ -81,7 +59,12 @@ def snapshot_command(args: Namespace, config: ConfigRepository) -> int:
                 ("Allocated", format_bytes(record.allocated_bytes)),
                 ("Files", f"{record.file_count:,}"),
                 ("Directories", f"{record.directory_count:,}"),
-                ("Filesystem scope", "cross-filesystems" if summary.cross_filesystems else "one filesystem"),
+                (
+                    "Filesystem scope",
+                    "cross-filesystems"
+                    if summary.cross_filesystems
+                    else "one filesystem",
+                ),
                 ("Skipped mounts", f"{summary.skipped_filesystem_count:,}"),
                 ("Duration", f"{summary.duration_seconds:.2f}s"),
             ]
@@ -105,6 +88,7 @@ def snapshot_command(args: Namespace, config: ConfigRepository) -> int:
 
 
 def show_command(args: Namespace, config: ConfigRepository) -> int:
+    """Render directory usage from one snapshot."""
     renderer = build_renderer(args)
     service = SnapshotQueryService(args.profile)
     record = service.resolve(args.snapshot)
@@ -123,7 +107,6 @@ def show_command(args: Namespace, config: ConfigRepository) -> int:
             metric=args.metric,
             modified_before_epoch=modified_before_epoch,
         )
-        assert scope is not None
         scope_metric_value = _directory_metric(scope, args.metric)
         capacity = _capacity_assessment(
             context.connection, context.metadata, capacity_policy
@@ -145,7 +128,9 @@ def show_command(args: Namespace, config: ConfigRepository) -> int:
                             scope.path,
                             scope_metric_value,
                             args.metric,
-                            reference_epoch=record.created_epoch if stale_enabled else None,
+                            reference_epoch=record.created_epoch
+                            if stale_enabled
+                            else None,
                             thresholds=args.stale_thresholds,
                         )
                         for item in rows
@@ -214,7 +199,9 @@ def show_command(args: Namespace, config: ConfigRepository) -> int:
                 output_rows.append(tuple(values))
             renderer.tsv(headers, output_rows)
         else:
-            _render_snapshot_header(renderer, record, context.metadata, scope, args.metric)
+            _render_snapshot_header(
+                renderer, record, context.metadata, scope, args.metric
+            )
             if capacity is not None:
                 _render_capacity_status(renderer, capacity)
                 renderer.message("")
@@ -248,7 +235,15 @@ def show_command(args: Namespace, config: ConfigRepository) -> int:
                 renderer.table(
                     ["Rank", "Size", "Share", "Distribution", "Files", "Stale", "Path"],
                     table_rows,
-                    alignments=["right", "right", "right", "left", "right", "right", "left"],
+                    alignments=[
+                        "right",
+                        "right",
+                        "right",
+                        "left",
+                        "right",
+                        "right",
+                        "left",
+                    ],
                 )
                 renderer.message(
                     "Stale age is measured at snapshot time from the newest modification "
@@ -261,6 +256,9 @@ def show_command(args: Namespace, config: ConfigRepository) -> int:
                     alignments=["right", "right", "right", "left", "right", "left"],
                 )
             if args.users:
+                # Import lazily because analysis commands call show_command for drill-down.
+                from qdu.commands.analysis import _render_users
+
                 renderer.message("")
                 _render_users(
                     renderer,
@@ -273,16 +271,26 @@ def show_command(args: Namespace, config: ConfigRepository) -> int:
                 )
     return 0
 
+
 def diff_command(args: Namespace) -> int:
+    """Render directory usage changes between two snapshots."""
     renderer = build_renderer(args)
     service = SnapshotQueryService(args.profile)
     current_record = service.resolve(args.to_snapshot)
-    previous_record = service.resolve(args.from_snapshot) if args.from_snapshot else service.previous_of(current_record)
+    previous_record = (
+        service.resolve(args.from_snapshot)
+        if args.from_snapshot
+        else service.previous_of(current_record)
+    )
     with ExitStack() as stack:
         previous = service.open_context(stack, previous_record)
         current = service.open_context(stack, current_record)
         _warn_metadata_difference(
-            renderer, previous_record, current_record, previous.metadata, current.metadata
+            renderer,
+            previous_record,
+            current_record,
+            previous.metadata,
+            current.metadata,
         )
         rows = service.diff_ranking(
             previous.connection,
@@ -333,8 +341,14 @@ def diff_command(args: Namespace) -> int:
             renderer.heading("Snapshot comparison")
             renderer.key_values(
                 [
-                    ("Previous", f"{previous_record.snapshot_id}  {previous_record.created_at}"),
-                    ("Current", f"{current_record.snapshot_id}  {current_record.created_at}"),
+                    (
+                        "Previous",
+                        f"{previous_record.snapshot_id}  {previous_record.created_at}",
+                    ),
+                    (
+                        "Current",
+                        f"{current_record.snapshot_id}  {current_record.created_at}",
+                    ),
                     ("Scope", scope),
                     ("Order", args.order),
                 ]
@@ -342,7 +356,13 @@ def diff_command(args: Namespace) -> int:
             renderer.message("")
             rows_for_table = []
             for rank, item in enumerate(rows, 1):
-                symbol = "↑" if item.change_bytes > 0 else "↓" if item.change_bytes < 0 else "→"
+                symbol = (
+                    "↑"
+                    if item.change_bytes > 0
+                    else "↓"
+                    if item.change_bytes < 0
+                    else "→"
+                )
                 rows_for_table.append(
                     (
                         rank,
@@ -362,6 +382,7 @@ def diff_command(args: Namespace) -> int:
 
 
 def list_command(args: Namespace) -> int:
+    """List snapshots recorded for a profile."""
     renderer = build_renderer(args)
     index = IndexRepository(ProfilePaths.for_profile(args.profile)).load()
     records = list(reversed(index.snapshots))[: args.top]
@@ -376,7 +397,16 @@ def list_command(args: Namespace) -> int:
         )
     elif args.format == "tsv":
         renderer.tsv(
-            ["snapshot_id", "created_at", "status", "allocated_bytes", "files", "directories", "root", "archived"],
+            [
+                "snapshot_id",
+                "created_at",
+                "status",
+                "allocated_bytes",
+                "files",
+                "directories",
+                "root",
+                "archived",
+            ],
             [
                 (
                     item.snapshot_id,
@@ -412,6 +442,7 @@ def list_command(args: Namespace) -> int:
 
 
 def errors_command(args: Namespace) -> int:
+    """Render scan errors stored in a snapshot."""
     renderer = build_renderer(args)
     service = SnapshotQueryService(args.profile)
     record = service.index.resolve(args.snapshot, include_incomplete=True)
@@ -421,7 +452,9 @@ def errors_command(args: Namespace) -> int:
             "SELECT path, operation, message FROM scan_errors ORDER BY id LIMIT ?",
             (args.top,),
         ).fetchall()
-    values = [(str(row["path"]), str(row["operation"]), str(row["message"])) for row in rows]
+    values = [
+        (str(row["path"]), str(row["operation"]), str(row["message"])) for row in rows
+    ]
     if args.format == "json":
         renderer.json(
             {
@@ -460,17 +493,30 @@ def _render_snapshot_header(
         [
             ("Snapshot", record.snapshot_id),
             ("Captured", f"{record.created_at}  ({format_age(age)} ago)"),
-            ("Status", "complete" if record.complete else f"incomplete ({record.error_count} errors)"),
+            (
+                "Status",
+                "complete"
+                if record.complete
+                else f"incomplete ({record.error_count} errors)",
+            ),
             ("Root", record.root),
-            ("Scope", f"{scope.path}  ({format_bytes(_directory_metric(scope, metric))}; {metric})"),
-            ("Filesystem scope", "cross-filesystems" if cross_filesystems else "one filesystem"),
+            (
+                "Scope",
+                f"{scope.path}  ({format_bytes(_directory_metric(scope, metric))}; {metric})",
+            ),
+            (
+                "Filesystem scope",
+                "cross-filesystems" if cross_filesystems else "one filesystem",
+            ),
             ("Skipped mounts", f"{skipped_count:,}"),
         ]
     )
     filesystem = _filesystem_json(metadata, Path(record.root))
     snapshot_fs = filesystem["snapshot"]
     renderer.message("")
-    _render_filesystem_status(renderer, "Filesystem capacity at snapshot time", snapshot_fs)
+    _render_filesystem_status(
+        renderer, "Filesystem capacity at snapshot time", snapshot_fs
+    )
     current = filesystem.get("current")
     if current:
         renderer.message("")
@@ -491,10 +537,14 @@ def _filesystem_json(metadata: dict[str, str], root: Path) -> dict[str, object]:
         "mode": "cross-filesystems" if cross_filesystems else "one-filesystem",
         "skipped_filesystem_count": int(metadata.get("skipped_filesystem_count", "0")),
         "skipped_filesystems": [
-            path for path in metadata.get("skipped_filesystems", "").splitlines() if path
+            path
+            for path in metadata.get("skipped_filesystems", "").splitlines()
+            if path
         ],
         "snapshot": {
-            "filesystem_count": int(metadata.get("filesystem_count", str(len(stored_paths)))),
+            "filesystem_count": int(
+                metadata.get("filesystem_count", str(len(stored_paths)))
+            ),
             "total_bytes": total,
             "available_bytes": available,
             "used_bytes": max(0, total - available),
@@ -537,7 +587,9 @@ def _current_filesystem_capacity(
         "available_bytes": available_bytes,
         "used_bytes": max(0, total_bytes - available_bytes),
         "used_percent": (
-            0.0 if total_bytes <= 0 else (total_bytes - available_bytes) * 100 / total_bytes
+            0.0
+            if total_bytes <= 0
+            else (total_bytes - available_bytes) * 100 / total_bytes
         ),
         "total_inodes": total_inodes,
         "available_inodes": available_inodes,
@@ -565,13 +617,17 @@ def _render_filesystem_status(
     renderer.key_values(values)
 
 
-def _warn_age(renderer: Renderer, record: SnapshotIndexRecord, value: str | None) -> None:
+def _warn_age(
+    renderer: Renderer, record: SnapshotIndexRecord, value: str | None
+) -> None:
     if value is None:
         return
     age = max(0, int(time.time()) - record.created_epoch)
     threshold = parse_duration(value)
     if age > threshold:
-        renderer.warning(f"snapshot is {format_age(age)} old (warning threshold: {value})")
+        renderer.warning(
+            f"snapshot is {format_age(age)} old (warning threshold: {value})"
+        )
 
 
 def _warn_metadata_difference(
@@ -589,7 +645,6 @@ def _warn_metadata_difference(
         "cross_filesystems", "false"
     ):
         renderer.warning("filesystem traversal modes differ between snapshots")
-
 
 
 def _record_json(record: SnapshotIndexRecord | None) -> dict[str, object] | None:
@@ -674,4 +729,3 @@ def _directory_metric(item: DirectoryRecord, metric: str) -> int:
     if metric == "inode_count":
         return item.inode_count
     return item.allocated_bytes
-

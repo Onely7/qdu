@@ -1,60 +1,17 @@
+"""Commands for analyzing and interactively exploring snapshots."""
+
 from __future__ import annotations
 
 import dataclasses
-import gzip
-import json
-import os
 import shutil
 import sqlite3
 import subprocess
-import sys
-import tempfile
 import time
 from argparse import Namespace
+from collections.abc import Sequence
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
-
-from qdu.capacity import CapacityAssessment, CapacityPolicy, assess_capacity
-from qdu.config import ConfigRepository, merge_profile_overrides
-from qdu.errors import BusyError, SnapshotFormatError, ThresholdExceeded, UsageError, VerificationError
-from qdu.live import largest_files_live
-from qdu.locking import ProfileLock, clear_stale_lock, inspect_lock
-from qdu.models import (
-    CheckResult,
-    DirectoryRecord,
-    DoctorItem,
-    FileRecord,
-    ProfileIndex,
-    SnapshotIndexRecord,
-)
-from qdu.patterns import PathPatternMatcher
-from qdu.query import (
-    SnapshotQueryService,
-    normalize_relative_path,
-    relative_to_scope,
-    resolve_user,
-)
-from qdu.render import RenderOptions, Renderer, TableCell, bar, percent
-from qdu.repository import SnapshotRepository
-from qdu.staleness import (
-    StaleLevel,
-    StaleThresholds,
-    assess_staleness,
-    stale_cutoff_epoch,
-)
-from qdu.storage import (
-    INDEX_VERSION,
-    IndexRepository,
-    ProfilePaths,
-    gzip_snapshot,
-    materialized_snapshot,
-    sha256_file,
-    validate_database,
-)
-from qdu.units import format_age, format_bytes, parse_duration, parse_size
-from qdu.scanner import username_for_uid
 
 from qdu.commands.context import build_renderer
 from qdu.commands.snapshots import (
@@ -65,16 +22,40 @@ from qdu.commands.snapshots import (
     diff_command,
     show_command,
 )
+from qdu.config import ConfigRepository
+from qdu.errors import (
+    UsageError,
+)
+from qdu.live import largest_files_live
+from qdu.models import (
+    FileRecord,
+    SnapshotIndexRecord,
+)
+from qdu.patterns import PathPatternMatcher
+from qdu.query import (
+    SnapshotQueryService,
+    relative_to_scope,
+)
+from qdu.render import Renderer, TableCell, percent
+from qdu.staleness import (
+    StaleThresholds,
+    assess_staleness,
+    stale_cutoff_epoch,
+)
+from qdu.units import format_bytes, parse_size
 
 
 def users_command(args: Namespace) -> int:
+    """Render owner usage from a snapshot."""
     renderer = build_renderer(args)
     service = SnapshotQueryService(args.profile)
     record = service.resolve(args.snapshot)
     with ExitStack() as stack:
         context = service.open_context(stack, record)
         if context.metadata.get("collect_users") != "true":
-            raise UsageError("this snapshot has no owner statistics; use 'qdu snapshot --with-users'")
+            raise UsageError(
+                "this snapshot has no owner statistics; use 'qdu snapshot --with-users'"
+            )
         _render_users(
             renderer,
             context.connection,
@@ -89,6 +70,7 @@ def users_command(args: Namespace) -> int:
 
 
 def files_command(args: Namespace, config: ConfigRepository) -> int:
+    """Render large or stale files from a snapshot or live scan."""
     renderer = build_renderer(args)
     stale_enabled = _stale_enabled(args)
     if args.live:
@@ -98,7 +80,9 @@ def files_command(args: Namespace, config: ConfigRepository) -> int:
             live_root = Path(args.path).expanduser()
         else:
             try:
-                live_root = Path(SnapshotQueryService(args.profile).resolve(args.snapshot).root)
+                live_root = Path(
+                    SnapshotQueryService(args.profile).resolve(args.snapshot).root
+                )
             except UsageError:
                 live_root = profile.root
         reference_epoch = int(time.time())
@@ -109,9 +93,7 @@ def files_command(args: Namespace, config: ConfigRepository) -> int:
             under=args.under,
             min_size=parse_size(args.min_size),
             user=args.user,
-            modified_before_epoch=stale_cutoff_epoch(
-                reference_epoch, args.stale_only
-            ),
+            modified_before_epoch=stale_cutoff_epoch(reference_epoch, args.stale_only),
         )
         for message in errors[:10]:
             renderer.warning(message)
@@ -148,7 +130,9 @@ def files_command(args: Namespace, config: ConfigRepository) -> int:
     )
     return 0
 
+
 def inodes_command(args: Namespace) -> int:
+    """Render inode usage by directory or owner."""
     renderer = build_renderer(args)
     service = SnapshotQueryService(args.profile)
     record = service.resolve(args.snapshot)
@@ -175,7 +159,6 @@ def inodes_command(args: Namespace) -> int:
                 match=args.match,
                 metric="inode_count",
             )
-            assert scope is not None
             if args.format == "json":
                 renderer.json(
                     {
@@ -191,7 +174,9 @@ def inodes_command(args: Namespace) -> int:
                             }
                             for rank, item in enumerate(rows, 1)
                         ],
-                        "filesystem": _filesystem_json(context.metadata, Path(record.root)),
+                        "filesystem": _filesystem_json(
+                            context.metadata, Path(record.root)
+                        ),
                     }
                 )
             elif args.format == "tsv":
@@ -215,8 +200,16 @@ def inodes_command(args: Namespace) -> int:
                     [
                         ("Snapshot", record.snapshot_id),
                         ("Scope", scope.path),
-                        ("Snapshot free inodes", f"{filesystem['snapshot']['available_inodes']:,}"),
-                        ("Current free inodes", f"{filesystem['current']['available_inodes']:,}" if filesystem.get("current") else "unavailable"),
+                        (
+                            "Snapshot free inodes",
+                            f"{filesystem['snapshot']['available_inodes']:,}",
+                        ),
+                        (
+                            "Current free inodes",
+                            f"{filesystem['current']['available_inodes']:,}"
+                            if filesystem.get("current")
+                            else "unavailable",
+                        ),
                     ]
                 )
                 renderer.message("")
@@ -238,6 +231,7 @@ def inodes_command(args: Namespace) -> int:
 
 
 def explain_command(args: Namespace, config: ConfigRepository) -> int:
+    """Explain the immediate contents or change below one path."""
     if args.diff:
         args.under = args.path_argument
         args.max_depth = 1
@@ -248,28 +242,41 @@ def explain_command(args: Namespace, config: ConfigRepository) -> int:
 
 
 def browse_command(args: Namespace, config: ConfigRepository) -> int:
-    if shutil.which("fzf") is None:
+    """Select a snapshot directory with fzf and display its usage.
+
+    Raises:
+        UsageError: If fzf is unavailable or its pipes cannot be opened.
+    """
+    fzf_path = shutil.which("fzf")
+    if fzf_path is None:
         raise UsageError("fzf is not installed; use 'qdu explain PATH' instead")
     service = SnapshotQueryService(args.profile)
     record = service.resolve(args.snapshot)
     with ExitStack() as stack:
         context = service.open_context(stack, record)
-        process = subprocess.Popen(
-            ["fzf", "--prompt", "qdu> ", "--height", "80%", "--reverse"],
+        # The executable is resolved to an absolute path and no shell is involved.
+        process = subprocess.Popen(  # noqa: S603
+            [fzf_path, "--prompt", "qdu> ", "--height", "80%", "--reverse"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
         )
-        assert process.stdin is not None
+        if process.stdin is None:
+            process.kill()
+            raise UsageError("cannot open the fzf input pipe")
         try:
-            for row in context.connection.execute("SELECT path FROM directories ORDER BY path"):
+            for row in context.connection.execute(
+                "SELECT path FROM directories ORDER BY path"
+            ):
                 process.stdin.write(f"{row[0]}\n")
         except BrokenPipeError:
             pass
         finally:
             process.stdin.close()
-        assert process.stdout is not None
+        if process.stdout is None:
+            process.kill()
+            raise UsageError("cannot open the fzf output pipe")
         selected = process.stdout.read().strip()
         return_code = process.wait()
     if return_code != 0 or not selected:
@@ -304,7 +311,10 @@ def _render_users(
                 "users": [
                     {
                         **dataclasses.asdict(owner),
-                        "directories": [dataclasses.asdict(item) for item in directories.get(owner.uid, [])],
+                        "directories": [
+                            dataclasses.asdict(item)
+                            for item in directories.get(owner.uid, [])
+                        ],
                     }
                     for owner in owners
                 ],
@@ -314,10 +324,33 @@ def _render_users(
     if output_format == "tsv":
         rows = []
         for rank, owner in enumerate(owners, 1):
-            rows.append(("user", rank, owner.uid, owner.username, owner.allocated_bytes, owner.inode_count, ""))
+            rows.append(
+                (
+                    "user",
+                    rank,
+                    owner.uid,
+                    owner.username,
+                    owner.allocated_bytes,
+                    owner.inode_count,
+                    "",
+                )
+            )
             for directory in directories.get(owner.uid, []):
-                rows.append(("directory", rank, owner.uid, owner.username, directory.allocated_bytes, directory.inode_count, directory.path))
-        renderer.tsv(["type", "rank", "uid", "user", "allocated_bytes", "inode_count", "path"], rows)
+                rows.append(
+                    (
+                        "directory",
+                        rank,
+                        owner.uid,
+                        owner.username,
+                        directory.allocated_bytes,
+                        directory.inode_count,
+                        directory.path,
+                    )
+                )
+        renderer.tsv(
+            ["type", "rank", "uid", "user", "allocated_bytes", "inode_count", "path"],
+            rows,
+        )
         return
     renderer.heading("User usage")
     if metric == "inode_count":

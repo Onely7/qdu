@@ -1,37 +1,28 @@
 from __future__ import annotations
 
-import io
 import json
 import os
 import sqlite3
-import subprocess
-import sys
-import tempfile
-import time
-import unittest
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
-
-from qdu.capacity import assess_capacity
-from qdu.cli import main
-from qdu.locking import ProfileLock
-from qdu.patterns import PathPatternMatcher
-from qdu.render import display_safe, display_width, truncate
-from qdu.staleness import StaleLevel, StaleThresholds, assess_staleness
-from qdu.scanner import FilesystemScanner
-from qdu.storage import (
-    IndexRepository,
-    ProfilePaths,
-    create_snapshot_database,
-    snapshot_metadata,
-)
-from qdu.units import format_bytes, parse_duration, parse_size
 
 from tests.support import QduIntegrationTestBase
 
 
 class SnapshotCommandTest(QduIntegrationTestBase):
+    def test_rejects_snapshot_filenames_outside_the_snapshot_directory(self) -> None:
+        self.write_file("data", 1024)
+        self.snapshot()
+        paths = self.profile_paths()
+        payload = json.loads(paths.index.read_text(encoding="utf-8"))
+        payload["snapshots"][0]["filename"] = "../outside.sqlite3"
+        paths.index.write_text(json.dumps(payload), encoding="utf-8")
+
+        status, _, error = self.run_qdu("list")
+
+        self.assertEqual(status, 4)
+        self.assertIn("invalid profile index", error)
+
     def test_snapshot_show_list_json(self) -> None:
         self.write_file("a/large.bin", 8192)
         self.write_file("b/small.bin", 1024)
@@ -113,10 +104,10 @@ class SnapshotCommandTest(QduIntegrationTestBase):
         self.write_file("keep/data", 1024)
         self.write_file("nested/cache/data", 16384)
         self.snapshot("--exclude", "cache", "--with-users")
-        status, output, _ = self.run_qdu("show", "-L", "5", "--format", "json")
+        _, output, _ = self.run_qdu("show", "-L", "5", "--format", "json")
         paths = [item["path"] for item in json.loads(output)["entries"]]
         self.assertFalse(any("cache" in path for path in paths))
-        status, output, _ = self.run_qdu("users", "--format", "json")
+        _, output, _ = self.run_qdu("users", "--format", "json")
         payload = json.loads(output)
         self.assertFalse(
             any(

@@ -1,19 +1,20 @@
+"""Load and atomically persist qdu profile configuration."""
+
 from __future__ import annotations
 
 import configparser
 import os
-import re
 from dataclasses import replace
 from pathlib import Path
 
 from qdu.errors import UsageError
 from qdu.models import ProfileConfig
+from qdu.profile_names import validate_profile_name
 from qdu.units import parse_size
-
-_PROFILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def xdg_config_home() -> Path:
+    """Return the effective XDG configuration directory without creating it."""
     raw = os.environ.get("XDG_CONFIG_HOME")
     if raw:
         return Path(raw).expanduser()
@@ -21,6 +22,7 @@ def xdg_config_home() -> Path:
 
 
 def xdg_state_home() -> Path:
+    """Return the effective XDG state directory without creating it."""
     raw = os.environ.get("XDG_STATE_HOME")
     if raw:
         return Path(raw).expanduser()
@@ -28,6 +30,8 @@ def xdg_state_home() -> Path:
 
 
 class ConfigRepository:
+    """Read and atomically write profile settings in one INI file."""
+
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or xdg_config_home() / "qdu" / "config.ini"
 
@@ -49,20 +53,27 @@ class ConfigRepository:
 
     @staticmethod
     def validate_profile_name(name: str) -> None:
-        if _PROFILE_RE.fullmatch(name) is None:
-            raise UsageError(
-                "profile names must start with an alphanumeric character and "
-                "contain only letters, numbers, '.', '_', or '-'"
-            )
+        """Reject names that cannot safely identify one profile path component."""
+        validate_profile_name(name)
 
     def list_profiles(self) -> list[str]:
+        """Return configured profile names plus the implicit default profile."""
         parser = self._read()
-        names = [section.removeprefix("profile:") for section in parser.sections() if section.startswith("profile:")]
+        names = [
+            section.removeprefix("profile:")
+            for section in parser.sections()
+            if section.startswith("profile:")
+        ]
         if "default" not in names:
             names.append("default")
         return sorted(set(names))
 
     def load_profile(self, name: str) -> ProfileConfig:
+        """Resolve defaults and named overrides into validated profile settings.
+
+        Raises:
+            UsageError: If the name or any stored setting is invalid.
+        """
         self.validate_profile_name(name)
         parser = self._read()
         defaults = parser["defaults"] if parser.has_section("defaults") else {}
@@ -75,9 +86,7 @@ class ConfigRepository:
         try:
             root_default = str(Path.home())
             excludes = tuple(
-                line.strip()
-                for line in get("exclude", "").splitlines()
-                if line.strip()
+                line.strip() for line in get("exclude", "").splitlines() if line.strip()
             )
             record_max_depth_raw = get("record_max_depth", "").strip()
             capacity_limit_raw = get("capacity_limit", "").strip()
@@ -87,18 +96,27 @@ class ConfigRepository:
                 root=Path(get("path", root_default)).expanduser(),
                 excludes=excludes,
                 keep_snapshots=int(get("keep_snapshots", "100")),
-                collect_users=get("collect_users", "false").lower() in {"1", "true", "yes", "on"},
+                collect_users=get("collect_users", "false").lower()
+                in {"1", "true", "yes", "on"},
                 user_max_depth=int(get("user_max_depth", "3")),
                 large_file_limit=int(get("large_file_limit", "1000")),
-                record_max_depth=(int(record_max_depth_raw) if record_max_depth_raw else None),
-                cross_filesystems=get("cross_filesystems", "false").lower() in {"1", "true", "yes", "on"},
-                capacity_limit_bytes=(parse_size(capacity_limit_raw) if capacity_limit_raw else None),
+                record_max_depth=(
+                    int(record_max_depth_raw) if record_max_depth_raw else None
+                ),
+                cross_filesystems=get("cross_filesystems", "false").lower()
+                in {"1", "true", "yes", "on"},
+                capacity_limit_bytes=(
+                    parse_size(capacity_limit_raw) if capacity_limit_raw else None
+                ),
                 capacity_user=capacity_user_raw or None,
             )
         except (ValueError, TypeError) as exc:
-            raise UsageError(f"invalid configuration for profile {name!r}: {exc}") from exc
+            raise UsageError(
+                f"invalid configuration for profile {name!r}: {exc}"
+            ) from exc
 
     def save_profile(self, profile: ProfileConfig) -> None:
+        """Atomically persist one validated profile with owner-only permissions."""
         self.validate_profile_name(profile.name)
         parser = self._read()
         section_name = f"profile:{profile.name}"
@@ -111,15 +129,21 @@ class ConfigRepository:
         section["collect_users"] = "true" if profile.collect_users else "false"
         section["user_max_depth"] = str(profile.user_max_depth)
         section["large_file_limit"] = str(profile.large_file_limit)
-        section["record_max_depth"] = "" if profile.record_max_depth is None else str(profile.record_max_depth)
+        section["record_max_depth"] = (
+            "" if profile.record_max_depth is None else str(profile.record_max_depth)
+        )
         section["cross_filesystems"] = "true" if profile.cross_filesystems else "false"
         section["capacity_limit"] = (
-            "" if profile.capacity_limit_bytes is None else f"{profile.capacity_limit_bytes}B"
+            ""
+            if profile.capacity_limit_bytes is None
+            else f"{profile.capacity_limit_bytes}B"
         )
         section["capacity_user"] = profile.capacity_user or ""
         self._write(parser)
 
     def remove_profile(self, name: str) -> bool:
+        """Remove a profile section without deleting its snapshot state."""
+        self.validate_profile_name(name)
         parser = self._read()
         removed = parser.remove_section(f"profile:{name}")
         if removed:
@@ -127,6 +151,7 @@ class ConfigRepository:
         return removed
 
     def initialize(self) -> bool:
+        """Create the default configuration unless a file already exists."""
         if self.path.exists():
             return False
         parser = configparser.ConfigParser(interpolation=None)
@@ -159,6 +184,13 @@ def merge_profile_overrides(
     capacity_limit_bytes: int | None | object = ...,
     capacity_user: str | None | object = ...,
 ) -> ProfileConfig:
+    """Return a validated profile with explicit command-line overrides applied.
+
+    Ellipsis values preserve settings whose command-line option was omitted.
+
+    Raises:
+        UsageError: If the combined settings violate profile invariants.
+    """
     values: dict[str, object] = {}
     if root is not None:
         values["root"] = root

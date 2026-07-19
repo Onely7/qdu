@@ -1,37 +1,35 @@
 from __future__ import annotations
 
-import io
 import json
 import os
 import sqlite3
-import subprocess
-import sys
-import tempfile
-import time
-import unittest
-from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
 from unittest.mock import patch
 
-from qdu.capacity import assess_capacity
-from qdu.cli import main
 from qdu.locking import ProfileLock
-from qdu.patterns import PathPatternMatcher
-from qdu.render import display_safe, display_width, truncate
-from qdu.staleness import StaleLevel, StaleThresholds, assess_staleness
-from qdu.scanner import FilesystemScanner
 from qdu.storage import (
     IndexRepository,
     ProfilePaths,
-    create_snapshot_database,
     snapshot_metadata,
 )
-from qdu.units import format_bytes, parse_duration, parse_size
-
 from tests.support import QduIntegrationTestBase
 
 
 class OperationsCommandTest(QduIntegrationTestBase):
+    def test_rejects_profile_names_that_can_escape_the_state_directory(self) -> None:
+        absolute_name = str((self.base / "escape").resolve())
+        for profile_name in (
+            "../escape",
+            absolute_name,
+            "nested/name",
+            "nested\\name",
+        ):
+            with self.subTest(profile_name=profile_name):
+                status, _, error = self.run_qdu(
+                    "profile", "remove", profile_name, "--delete-data"
+                )
+                self.assertEqual(status, 2)
+                self.assertIn("profile names", error)
+
     def test_cross_filesystems_snapshot_option_is_recorded(self) -> None:
         self.write_file("data/file", 1024)
         status, _, _ = self.snapshot("--cross-filesystems")

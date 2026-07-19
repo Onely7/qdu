@@ -1,31 +1,11 @@
 from __future__ import annotations
 
-import io
-import json
-import os
-import sqlite3
-import subprocess
-import sys
-import tempfile
-import time
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
-from unittest.mock import patch
 
 from qdu.capacity import assess_capacity
-from qdu.cli import main
-from qdu.locking import ProfileLock
 from qdu.patterns import PathPatternMatcher
 from qdu.render import display_safe, display_width, truncate
 from qdu.staleness import StaleLevel, StaleThresholds, assess_staleness
-from qdu.scanner import FilesystemScanner
-from qdu.storage import (
-    IndexRepository,
-    ProfilePaths,
-    create_snapshot_database,
-    snapshot_metadata,
-)
 from qdu.units import format_bytes, parse_duration, parse_size
 
 
@@ -68,5 +48,3 @@ class UtilityTest(unittest.TestCase):
         self.assertEqual(display_width("日本"), 4)
         self.assertLessEqual(display_width(truncate("日本語ファイル", 6)), 6)
         self.assertEqual(display_safe("a\tb\nc"), "a\\tb\\nc")
-
-

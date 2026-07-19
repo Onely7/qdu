@@ -1,3 +1,5 @@
+"""Orchestrate scanning, snapshot finalization, indexing, and retention."""
+
 from __future__ import annotations
 
 import os
@@ -20,12 +22,25 @@ from qdu.storage import (
 
 
 class SnapshotRepository:
+    """Create and retain snapshots for one immutable profile configuration."""
+
     def __init__(self, profile: ProfileConfig) -> None:
         self.profile = profile
         self.paths = ProfilePaths.for_profile(profile.name)
         self.index = IndexRepository(self.paths)
 
-    def create(self, *, quiet: bool = False) -> tuple[SnapshotIndexRecord, SnapshotSummary]:
+    def create(
+        self, *, quiet: bool = False
+    ) -> tuple[SnapshotIndexRecord, SnapshotSummary]:
+        """Scan the profile root and atomically publish a new snapshot.
+
+        The temporary database is removed after any fatal failure. Recoverable
+        scan errors produce an indexed incomplete snapshot.
+
+        Raises:
+            BusyError: If another mutating profile operation holds the lock.
+            UsageError: If the root is invalid or conflicts with existing history.
+        """
         self.paths.ensure()
         command = f"snapshot profile={self.profile.name} root={self.profile.root}"
         with ProfileLock(self.paths.lock, command):
@@ -33,7 +48,9 @@ class SnapshotRepository:
             canonical_root = self.profile.root.expanduser().resolve()
             if existing_index.latest_any is not None:
                 latest_record = next(
-                    item for item in existing_index.snapshots if item.snapshot_id == existing_index.latest_any
+                    item
+                    for item in existing_index.snapshots
+                    if item.snapshot_id == existing_index.latest_any
                 )
                 if Path(latest_record.root) != canonical_root:
                     raise UsageError(
@@ -126,7 +143,9 @@ class SnapshotRepository:
             "filesystem_paths": "\n".join(summary.filesystem_paths),
             "filesystem_count": str(len(summary.filesystem_paths)),
         }
-        stored_directory_count = connection.execute("SELECT COUNT(*) FROM directories").fetchone()[0]
+        stored_directory_count = connection.execute(
+            "SELECT COUNT(*) FROM directories"
+        ).fetchone()[0]
         metadata["stored_directory_count"] = str(stored_directory_count)
         connection.executemany(
             "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
@@ -138,6 +157,10 @@ class SnapshotRepository:
         connection.execute("VACUUM")
 
     def prune(self, keep: int) -> list[str]:
+        """Remove oldest snapshots until at most ``keep`` records remain.
+
+        A non-positive value disables retention pruning.
+        """
         if keep <= 0:
             return []
         index = self.index.load()

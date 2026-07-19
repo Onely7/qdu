@@ -1,3 +1,5 @@
+"""Define qdu's command-line grammar and process exit behavior."""
+
 from __future__ import annotations
 
 import argparse
@@ -6,6 +8,7 @@ import sqlite3
 import sys
 from collections.abc import Sequence
 
+from qdu._version import __version__
 from qdu.commands import (
     browse_command,
     check_command,
@@ -31,10 +34,9 @@ from qdu.errors import QduError, ThresholdExceeded
 from qdu.staleness import DEFAULT_STALE_THRESHOLDS, StaleThresholds
 from qdu.units import parse_size
 
-__version__ = "0.0.1"
-
 
 def positive_int(value: str) -> int:
+    """Parse an integer strictly greater than zero for argparse."""
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
@@ -42,6 +44,7 @@ def positive_int(value: str) -> int:
 
 
 def non_negative_int(value: str) -> int:
+    """Parse an integer greater than or equal to zero for argparse."""
     parsed = int(value)
     if parsed < 0:
         raise argparse.ArgumentTypeError("must be a non-negative integer")
@@ -49,6 +52,7 @@ def non_negative_int(value: str) -> int:
 
 
 def percentage(value: str) -> float:
+    """Parse an inclusive percentage from zero through one hundred."""
     parsed = float(value)
     if not 0 <= parsed <= 100:
         raise argparse.ArgumentTypeError("must be between 0 and 100")
@@ -56,6 +60,7 @@ def percentage(value: str) -> float:
 
 
 def capacity_size(value: str) -> int:
+    """Parse a strictly positive capacity size for argparse."""
     try:
         parsed = parse_size(value)
     except QduError as exc:
@@ -66,6 +71,7 @@ def capacity_size(value: str) -> int:
 
 
 def stale_thresholds(value: str) -> StaleThresholds:
+    """Parse four inactivity thresholds for argparse."""
     try:
         return StaleThresholds.parse(value)
     except ValueError as exc:
@@ -73,6 +79,7 @@ def stale_thresholds(value: str) -> StaleThresholds:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the complete qdu argument parser without reading process state."""
     parser = argparse.ArgumentParser(
         prog="qdu",
         description="Fast, profile-aware disk-usage snapshots for ordinary users.",
@@ -446,6 +453,14 @@ def _display_options(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Execute one qdu command and translate expected failures to exit codes.
+
+    Args:
+        argv: Arguments excluding the program name. ``None`` reads ``sys.argv``.
+
+    Returns:
+        A stable process exit code; no arguments behave as ``qdu show``.
+    """
     arguments = list(argv if argv is not None else sys.argv[1:])
     if not arguments:
         arguments = ["show"]

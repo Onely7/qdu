@@ -1,3 +1,5 @@
+"""Coordinate profile mutations with advisory process locks."""
+
 from __future__ import annotations
 
 import fcntl
@@ -15,6 +17,8 @@ from qdu.errors import BusyError
 
 @dataclass(slots=True)
 class ProfileLock:
+    """Hold an exclusive lock and publish diagnostic process metadata."""
+
     path: Path
     command: str
     handle: IO[str] | None = None
@@ -60,6 +64,7 @@ class ProfileLock:
 
 
 def inspect_lock(path: Path) -> tuple[bool, dict[str, object] | None]:
+    """Inspect lock activity and best-effort metadata without taking ownership."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     handle = path.open("a+", encoding="utf-8")
     active = False
@@ -81,6 +86,7 @@ def inspect_lock(path: Path) -> tuple[bool, dict[str, object] | None]:
 
 
 def clear_stale_lock(path: Path) -> bool:
+    """Remove an inactive lock file without breaking an active operation."""
     active, _ = inspect_lock(path)
     if active:
         return False

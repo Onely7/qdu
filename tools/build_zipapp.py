@@ -1,3 +1,5 @@
+"""Build the self-contained qdu zipapp release artifact."""
+
 from __future__ import annotations
 
 import shutil

@@ -1,65 +1,25 @@
+"""Commands for managing profiles and resolved configuration."""
+
 from __future__ import annotations
 
 import dataclasses
-import gzip
-import json
-import os
 import shutil
-import sqlite3
-import subprocess
-import sys
-import tempfile
-import time
 from argparse import Namespace
-from contextlib import ExitStack
-from datetime import datetime
 from pathlib import Path
-from typing import Sequence
-
-from qdu.capacity import CapacityAssessment, CapacityPolicy, assess_capacity
-from qdu.config import ConfigRepository, merge_profile_overrides
-from qdu.errors import BusyError, SnapshotFormatError, ThresholdExceeded, UsageError, VerificationError
-from qdu.live import largest_files_live
-from qdu.locking import ProfileLock, clear_stale_lock, inspect_lock
-from qdu.models import (
-    CheckResult,
-    DirectoryRecord,
-    DoctorItem,
-    FileRecord,
-    ProfileIndex,
-    SnapshotIndexRecord,
-)
-from qdu.patterns import PathPatternMatcher
-from qdu.query import (
-    SnapshotQueryService,
-    normalize_relative_path,
-    relative_to_scope,
-    resolve_user,
-)
-from qdu.render import RenderOptions, Renderer, TableCell, bar, percent
-from qdu.repository import SnapshotRepository
-from qdu.staleness import (
-    StaleLevel,
-    StaleThresholds,
-    assess_staleness,
-    stale_cutoff_epoch,
-)
-from qdu.storage import (
-    INDEX_VERSION,
-    IndexRepository,
-    ProfilePaths,
-    gzip_snapshot,
-    materialized_snapshot,
-    sha256_file,
-    validate_database,
-)
-from qdu.units import format_age, format_bytes, parse_duration, parse_size
-from qdu.scanner import username_for_uid
 
 from qdu.commands.context import build_renderer
+from qdu.config import ConfigRepository, merge_profile_overrides
+from qdu.errors import (
+    UsageError,
+)
+from qdu.storage import (
+    ProfilePaths,
+)
+from qdu.units import format_bytes
 
 
 def profile_command(args: Namespace, config: ConfigRepository) -> int:
+    """List, show, add, or remove a profile."""
     renderer = build_renderer(args)
     if args.profile_action == "list":
         names = config.list_profiles()
@@ -95,14 +55,12 @@ def profile_command(args: Namespace, config: ConfigRepository) -> int:
             record_max_depth=args.record_max_depth,
             cross_filesystems=args.cross_filesystems,
             capacity_limit_bytes=(
-                getattr(args, "capacity_limit_bytes")
+                args.capacity_limit_bytes
                 if hasattr(args, "capacity_limit_bytes")
                 else ...
             ),
             capacity_user=(
-                getattr(args, "capacity_user")
-                if hasattr(args, "capacity_user")
-                else ...
+                args.capacity_user if hasattr(args, "capacity_user") else ...
             ),
         )
         if profile.capacity_limit_bytes is None and profile.capacity_user is not None:
@@ -116,19 +74,26 @@ def profile_command(args: Namespace, config: ConfigRepository) -> int:
             paths = ProfilePaths.for_profile(args.name)
             if paths.root.exists():
                 shutil.rmtree(paths.root)
-        renderer.message(f"Profile removed: {args.name}" if removed else f"Profile was not configured: {args.name}")
+        renderer.message(
+            f"Profile removed: {args.name}"
+            if removed
+            else f"Profile was not configured: {args.name}"
+        )
         return 0
     raise UsageError("unknown profile action")
 
 
 def config_command(args: Namespace, config: ConfigRepository) -> int:
+    """Render the effective configuration for a profile."""
     renderer = build_renderer(args)
     if args.config_action == "path":
         renderer.message(str(config.path))
         return 0
     if args.config_action == "init":
         created = config.initialize()
-        renderer.message(f"Created {config.path}" if created else f"Already exists: {config.path}")
+        renderer.message(
+            f"Created {config.path}" if created else f"Already exists: {config.path}"
+        )
         return 0
     if args.config_action == "show":
         profile = config.load_profile(args.profile)
@@ -145,6 +110,7 @@ def _profile_capacity_text(profile: object) -> str:
         return "not set"
     target = profile.capacity_user or "profile root"
     return f"{format_bytes(profile.capacity_limit_bytes)} ({target})"
+
 
 def _profile_json(profile: object) -> dict[str, object]:
     return {

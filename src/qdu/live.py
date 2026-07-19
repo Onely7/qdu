@@ -1,3 +1,5 @@
+"""Find large files by scanning the live filesystem without a snapshot."""
+
 from __future__ import annotations
 
 import heapq
@@ -21,6 +23,11 @@ def largest_files_live(
     user: str | None,
     modified_before_epoch: float | None = None,
 ) -> tuple[list[FileRecord], list[str]]:
+    """Return the largest matching live files and recoverable scan errors.
+
+    The scan stays on the root filesystem, does not follow symlinks, and counts
+    hard-linked inodes once. Errors are returned instead of aborting the scan.
+    """
     canonical_root = root.expanduser().resolve()
     scope = normalize_relative_path(under)
     start = canonical_root if scope == "." else canonical_root / scope
@@ -47,7 +54,9 @@ def largest_files_live(
                 except OSError as exc:
                     errors.append(f"{entry.path}: {exc}")
                     continue
-                is_directory = stat.S_ISDIR(value.st_mode) and not stat.S_ISLNK(value.st_mode)
+                is_directory = stat.S_ISDIR(value.st_mode) and not stat.S_ISLNK(
+                    value.st_mode
+                )
                 if is_directory and value.st_dev != root_device:
                     continue
                 relative = Path(entry.path).relative_to(canonical_root).as_posix()
@@ -63,7 +72,9 @@ def largest_files_live(
                     if inode_key in seen_hardlinks:
                         continue
                     seen_hardlinks.add(inode_key)
-                allocated = int(getattr(value, "st_blocks", 0)) * 512 or int(value.st_size)
+                allocated = int(getattr(value, "st_blocks", 0)) * 512 or int(
+                    value.st_size
+                )
                 if allocated < min_size:
                     continue
                 if (
@@ -71,7 +82,13 @@ def largest_files_live(
                     and float(value.st_mtime) > modified_before_epoch
                 ):
                     continue
-                item = (allocated, relative, int(value.st_uid), int(value.st_size), float(value.st_mtime))
+                item = (
+                    allocated,
+                    relative,
+                    int(value.st_uid),
+                    int(value.st_size),
+                    float(value.st_mtime),
+                )
                 if len(heap) < top:
                     heapq.heappush(heap, item)
                 elif item > heap[0]:

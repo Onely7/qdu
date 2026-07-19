@@ -1,32 +1,18 @@
 from __future__ import annotations
 
 import io
-import json
 import os
-import sqlite3
-import subprocess
-import sys
 import tempfile
-import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from qdu.capacity import assess_capacity
 from qdu.cli import main
-from qdu.locking import ProfileLock
-from qdu.patterns import PathPatternMatcher
-from qdu.render import display_safe, display_width, truncate
-from qdu.staleness import StaleLevel, StaleThresholds, assess_staleness
-from qdu.scanner import FilesystemScanner
 from qdu.storage import (
     IndexRepository,
     ProfilePaths,
-    create_snapshot_database,
-    snapshot_metadata,
 )
-from qdu.units import format_bytes, parse_duration, parse_size
 
 
 class QduIntegrationTestBase(unittest.TestCase):
@@ -52,9 +38,12 @@ class QduIntegrationTestBase(unittest.TestCase):
     def run_qdu(self, *arguments: str) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with patch.dict(os.environ, self.environment, clear=False):
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = main(list(arguments))
+        with (
+            patch.dict(os.environ, self.environment, clear=False),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            status = main(list(arguments))
         return status, stdout.getvalue(), stderr.getvalue()
 
     def write_file(self, relative: str, size: int, byte: bytes = b"x") -> Path:

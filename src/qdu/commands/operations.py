@@ -1,3 +1,5 @@
+"""Operational maintenance and integrity-check commands."""
+
 from __future__ import annotations
 
 import dataclasses
@@ -6,43 +8,33 @@ import json
 import os
 import shutil
 import sqlite3
-import subprocess
 import sys
 import tempfile
 import time
 from argparse import Namespace
 from contextlib import ExitStack
-from datetime import datetime
 from pathlib import Path
-from typing import Sequence
 
-from qdu.capacity import CapacityAssessment, CapacityPolicy, assess_capacity
-from qdu.config import ConfigRepository, merge_profile_overrides
-from qdu.errors import BusyError, SnapshotFormatError, ThresholdExceeded, UsageError, VerificationError
-from qdu.live import largest_files_live
+from qdu.commands.capacity_support import _capacity_assessment, _capacity_policy
+from qdu.commands.context import build_renderer
+from qdu.config import ConfigRepository
+from qdu.errors import (
+    BusyError,
+    SnapshotFormatError,
+    ThresholdExceeded,
+    UsageError,
+    VerificationError,
+)
 from qdu.locking import ProfileLock, clear_stale_lock, inspect_lock
 from qdu.models import (
     CheckResult,
-    DirectoryRecord,
     DoctorItem,
-    FileRecord,
     ProfileIndex,
     SnapshotIndexRecord,
 )
-from qdu.patterns import PathPatternMatcher
 from qdu.query import (
     SnapshotQueryService,
     normalize_relative_path,
-    relative_to_scope,
-    resolve_user,
-)
-from qdu.render import RenderOptions, Renderer, TableCell, bar, percent
-from qdu.repository import SnapshotRepository
-from qdu.staleness import (
-    StaleLevel,
-    StaleThresholds,
-    assess_staleness,
-    stale_cutoff_epoch,
 )
 from qdu.storage import (
     INDEX_VERSION,
@@ -53,14 +45,11 @@ from qdu.storage import (
     sha256_file,
     validate_database,
 )
-from qdu.units import format_age, format_bytes, parse_duration, parse_size
-from qdu.scanner import username_for_uid
-
-from qdu.commands.capacity_support import _capacity_assessment, _capacity_policy
-from qdu.commands.context import build_renderer
+from qdu.units import format_bytes, parse_duration, parse_size
 
 
 def check_command(args: Namespace, config: ConfigRepository) -> int:
+    """Evaluate automation-oriented usage and freshness thresholds."""
     renderer = build_renderer(args)
     service = SnapshotQueryService(args.profile)
     current_record = service.resolve(args.snapshot)
@@ -123,7 +112,8 @@ def check_command(args: Namespace, config: ConfigRepository) -> int:
             capacity = _capacity_assessment(
                 current.connection, current.metadata, capacity_policy
             )
-        assert capacity is not None
+        if capacity is None:
+            raise SnapshotFormatError("capacity policy produced no assessment")
         results.append(
             CheckResult(
                 name="operational_capacity",
@@ -137,20 +127,42 @@ def check_command(args: Namespace, config: ConfigRepository) -> int:
             )
         )
     if not results:
-        raise UsageError("check requires at least one threshold option or a configured capacity limit")
+        raise UsageError(
+            "check requires at least one threshold option or a configured capacity limit"
+        )
     if args.format == "json":
-        renderer.json({"passed": all(item.passed for item in results), "checks": [dataclasses.asdict(item) for item in results]})
+        renderer.json(
+            {
+                "passed": all(item.passed for item in results),
+                "checks": [dataclasses.asdict(item) for item in results],
+            }
+        )
     elif args.format == "tsv":
         renderer.tsv(
             ["name", "passed", "observed", "threshold", "detail"],
-            [(item.name, str(item.passed).lower(), item.observed, item.threshold, item.detail) for item in results],
+            [
+                (
+                    item.name,
+                    str(item.passed).lower(),
+                    item.observed,
+                    item.threshold,
+                    item.detail,
+                )
+                for item in results
+            ],
         )
     else:
         renderer.heading("Capacity checks")
         renderer.table(
             ["Check", "Result", "Observed", "Threshold", "Target"],
             [
-                (item.name, "PASS" if item.passed else "ALERT", item.observed, item.threshold, item.detail)
+                (
+                    item.name,
+                    "PASS" if item.passed else "ALERT",
+                    item.observed,
+                    item.threshold,
+                    item.detail,
+                )
                 for item in results
             ],
             alignments=["left", "center", "right", "right", "left"],
@@ -161,6 +173,7 @@ def check_command(args: Namespace, config: ConfigRepository) -> int:
 
 
 def compact_command(args: Namespace) -> int:
+    """Compress eligible snapshots while preserving configured retention."""
     renderer = build_renderer(args)
     paths = ProfilePaths.for_profile(args.profile)
     repository = IndexRepository(paths)
@@ -168,9 +181,11 @@ def compact_command(args: Namespace) -> int:
     cutoff = time.time() - parse_duration(args.older_than)
     with ProfileLock(paths.lock, f"compact profile={args.profile}"):
         index = repository.load()
-        protected = set(
-            item.snapshot_id for item in index.snapshots[-args.keep_latest :]
-        ) if args.keep_latest else set()
+        protected = (
+            {item.snapshot_id for item in index.snapshots[-args.keep_latest :]}
+            if args.keep_latest
+            else set()
+        )
         if index.latest_complete:
             protected.add(index.latest_complete)
         if index.latest_any:
@@ -178,7 +193,11 @@ def compact_command(args: Namespace) -> int:
         updated: list[SnapshotIndexRecord] = []
         compacted: list[str] = []
         for record in index.snapshots:
-            if record.archived or record.created_epoch > cutoff or record.snapshot_id in protected:
+            if (
+                record.archived
+                or record.created_epoch > cutoff
+                or record.snapshot_id in protected
+            ):
                 updated.append(record)
                 continue
             source = paths.snapshots / record.filename
@@ -213,11 +232,16 @@ def compact_command(args: Namespace) -> int:
 
 
 def verify_command(args: Namespace) -> int:
+    """Verify indexed snapshot files and their database integrity."""
     renderer = build_renderer(args)
     paths = ProfilePaths.for_profile(args.profile)
     repository = IndexRepository(paths)
     index = repository.load()
-    records = list(index.snapshots) if args.all else [repository.resolve(args.snapshot, include_incomplete=True)]
+    records = (
+        list(index.snapshots)
+        if args.all
+        else [repository.resolve(args.snapshot, include_incomplete=True)]
+    )
     rows: list[tuple[str, str, str]] = []
     failed = False
     for record in records:
@@ -235,7 +259,15 @@ def verify_command(args: Namespace) -> int:
             failed = True
             rows.append((record.snapshot_id, "FAILED", str(exc)))
     if args.format == "json":
-        renderer.json({"profile": args.profile, "verified": not failed, "results": [{"snapshot": a, "status": b, "detail": c} for a, b, c in rows]})
+        renderer.json(
+            {
+                "profile": args.profile,
+                "verified": not failed,
+                "results": [
+                    {"snapshot": a, "status": b, "detail": c} for a, b, c in rows
+                ],
+            }
+        )
     elif args.format == "tsv":
         renderer.tsv(["snapshot", "status", "detail"], rows)
     else:
@@ -247,13 +279,16 @@ def verify_command(args: Namespace) -> int:
 
 
 def doctor_command(args: Namespace, config: ConfigRepository) -> int:
+    """Diagnose profile configuration, storage, and lock health."""
     renderer = build_renderer(args)
     profile = config.load_profile(args.profile)
     paths = ProfilePaths.for_profile(args.profile)
     items: list[DoctorItem] = []
     items.append(DoctorItem("Python", "OK", sys.version.split()[0]))
     items.append(DoctorItem("SQLite", "OK", sqlite3.sqlite_version))
-    items.append(DoctorItem("Config", "OK" if config.path.exists() else "INFO", str(config.path)))
+    items.append(
+        DoctorItem("Config", "OK" if config.path.exists() else "INFO", str(config.path))
+    )
     try:
         paths.ensure()
         probe = paths.root / ".write-test"
@@ -264,7 +299,9 @@ def doctor_command(args: Namespace, config: ConfigRepository) -> int:
         items.append(DoctorItem("State directory", "FAILED", str(exc)))
     if profile.root.exists() and profile.root.is_dir():
         readable = os.access(profile.root, os.R_OK | os.X_OK)
-        items.append(DoctorItem("Profile root", "OK" if readable else "WARN", str(profile.root)))
+        items.append(
+            DoctorItem("Profile root", "OK" if readable else "WARN", str(profile.root))
+        )
     else:
         items.append(DoctorItem("Profile root", "FAILED", f"missing: {profile.root}"))
     items.append(
@@ -275,31 +312,61 @@ def doctor_command(args: Namespace, config: ConfigRepository) -> int:
         )
     )
     active, metadata = inspect_lock(paths.lock)
-    items.append(DoctorItem("Lock", "BUSY" if active else "OK", json.dumps(metadata, ensure_ascii=False) if metadata else "not active"))
+    items.append(
+        DoctorItem(
+            "Lock",
+            "BUSY" if active else "OK",
+            json.dumps(metadata, ensure_ascii=False) if metadata else "not active",
+        )
+    )
     if paths.index.exists():
         try:
             index = IndexRepository(paths).load()
-            items.append(DoctorItem("Index", "OK", f"{len(index.snapshots)} snapshot(s)"))
+            items.append(
+                DoctorItem("Index", "OK", f"{len(index.snapshots)} snapshot(s)")
+            )
             if index.latest_any is not None:
-                latest = next(item for item in index.snapshots if item.snapshot_id == index.latest_any)
+                latest = next(
+                    item
+                    for item in index.snapshots
+                    if item.snapshot_id == index.latest_any
+                )
                 items.append(DoctorItem("Bound snapshot root", "OK", latest.root))
         except SnapshotFormatError as exc:
             items.append(DoctorItem("Index", "FAILED", str(exc)))
     else:
         items.append(DoctorItem("Index", "INFO", "not created yet"))
     usage = shutil.disk_usage(paths.root)
-    items.append(DoctorItem("State free space", "OK" if usage.free > 100 * 1024 * 1024 else "WARN", format_bytes(usage.free)))
+    items.append(
+        DoctorItem(
+            "State free space",
+            "OK" if usage.free > 100 * 1024 * 1024 else "WARN",
+            format_bytes(usage.free),
+        )
+    )
     if args.format == "json":
-        renderer.json({"profile": args.profile, "items": [dataclasses.asdict(item) for item in items]})
+        renderer.json(
+            {
+                "profile": args.profile,
+                "items": [dataclasses.asdict(item) for item in items],
+            }
+        )
     elif args.format == "tsv":
-        renderer.tsv(["name", "status", "detail"], [(item.name, item.status, item.detail) for item in items])
+        renderer.tsv(
+            ["name", "status", "detail"],
+            [(item.name, item.status, item.detail) for item in items],
+        )
     else:
         renderer.heading("qdu doctor")
-        renderer.table(["Check", "Status", "Detail"], [(item.name, item.status, item.detail) for item in items])
+        renderer.table(
+            ["Check", "Status", "Detail"],
+            [(item.name, item.status, item.detail) for item in items],
+        )
     return 1 if any(item.status == "FAILED" for item in items) else 0
 
 
 def repair_command(args: Namespace) -> int:
+    """Rebuild a profile index from valid snapshot databases."""
     renderer = build_renderer(args)
     paths = ProfilePaths.for_profile(args.profile)
     paths.ensure()
@@ -314,10 +381,15 @@ def repair_command(args: Namespace) -> int:
             try:
                 archived = file_path.name.endswith(".gz")
                 if archived:
-                    with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False, dir=paths.temporary) as temporary_handle:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".sqlite3", delete=False, dir=paths.temporary
+                    ) as temporary_handle:
                         temporary_path = Path(temporary_handle.name)
                     try:
-                        with gzip.open(file_path, "rb") as source, temporary_path.open("wb") as target:
+                        with (
+                            gzip.open(file_path, "rb") as source,
+                            temporary_path.open("wb") as target,
+                        ):
                             shutil.copyfileobj(source, target)
                         metadata = validate_database(temporary_path)
                     finally:
@@ -344,29 +416,45 @@ def repair_command(args: Namespace) -> int:
         if not args.dry_run:
             clear_stale_lock(paths.lock)
     renderer.heading("Repair")
-    renderer.key_values([("Profile", args.profile), ("Mode", "dry-run" if args.dry_run else "completed")])
+    renderer.key_values(
+        [
+            ("Profile", args.profile),
+            ("Mode", "dry-run" if args.dry_run else "completed"),
+        ]
+    )
     for action in actions:
         renderer.message(f"- {action}")
     return 0
 
 
 def unlock_command(args: Namespace) -> int:
+    """Remove a stale profile lock after validating its ownership state."""
     renderer = build_renderer(args)
     paths = ProfilePaths.for_profile(args.profile)
     active, metadata = inspect_lock(paths.lock)
     if active:
-        raise BusyError(f"lock is active and cannot be forcibly broken safely: {metadata}")
+        raise BusyError(
+            f"lock is active and cannot be forcibly broken safely: {metadata}"
+        )
     removed = clear_stale_lock(paths.lock)
-    renderer.message("Stale lock metadata removed." if removed else "No stale lock metadata was present.")
+    renderer.message(
+        "Stale lock metadata removed."
+        if removed
+        else "No stale lock metadata was present."
+    )
     return 0
 
 
 def _directory_value(connection: sqlite3.Connection, path: str) -> int:
-    row = connection.execute("SELECT allocated_bytes FROM directories WHERE path = ?", (path,)).fetchone()
+    row = connection.execute(
+        "SELECT allocated_bytes FROM directories WHERE path = ?", (path,)
+    ).fetchone()
     return int(row[0]) if row is not None else 0
 
 
-def _record_from_metadata(metadata: dict[str, str], file_path: Path, archived: bool) -> SnapshotIndexRecord:
+def _record_from_metadata(
+    metadata: dict[str, str], file_path: Path, archived: bool
+) -> SnapshotIndexRecord:
     return SnapshotIndexRecord(
         snapshot_id=metadata["snapshot_id"],
         filename=file_path.name,
@@ -387,4 +475,3 @@ def _record_from_metadata(metadata: dict[str, str], file_path: Path, archived: b
         sha256=sha256_file(file_path),
         archived=archived,
     )
-

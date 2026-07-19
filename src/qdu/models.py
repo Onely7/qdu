@@ -1,12 +1,18 @@
+"""Define immutable snapshot contracts and localized scan accumulators."""
+
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+
+from qdu.profile_names import validate_profile_name
 
 
 @dataclass(frozen=True, slots=True)
 class ProfileConfig:
+    """Validated settings for one named scan root and retention policy."""
+
     name: str
     root: Path
     excludes: tuple[str, ...] = ()
@@ -20,8 +26,7 @@ class ProfileConfig:
     capacity_user: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.name:
-            raise ValueError("profile name must not be empty")
+        validate_profile_name(self.name)
         if self.keep_snapshots < 0:
             raise ValueError("keep_snapshots must be non-negative")
         if self.user_max_depth < 0:
@@ -42,6 +47,8 @@ class ProfileConfig:
 
 @dataclass(frozen=True, slots=True)
 class SnapshotIndexRecord:
+    """Trusted index metadata for one stored snapshot file."""
+
     snapshot_id: str
     filename: str
     created_epoch: int
@@ -61,8 +68,26 @@ class SnapshotIndexRecord:
     sha256: str
     archived: bool = False
 
+    def __post_init__(self) -> None:
+        if (
+            not self.filename
+            or "/" in self.filename
+            or "\\" in self.filename
+            or not self.filename.endswith((".sqlite3", ".sqlite3.gz"))
+        ):
+            raise ValueError(
+                "snapshot filename must be a safe SQLite snapshot basename"
+            )
+
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> SnapshotIndexRecord:
+        """Build and validate an index record decoded from JSON.
+
+        Raises:
+            KeyError: If a required field is absent.
+            TypeError: If a field cannot be converted to its required shape.
+            ValueError: If the snapshot filename is unsafe.
+        """
         return cls(
             snapshot_id=str(value["snapshot_id"]),
             filename=str(value["filename"]),
@@ -85,6 +110,7 @@ class SnapshotIndexRecord:
         )
 
     def to_dict(self) -> dict[str, object]:
+        """Return the stable JSON representation stored in the profile index."""
         return {
             "snapshot_id": self.snapshot_id,
             "filename": self.filename,
@@ -109,6 +135,8 @@ class SnapshotIndexRecord:
 
 @dataclass(frozen=True, slots=True)
 class DirectoryRecord:
+    """Aggregated usage and freshness for one snapshot directory."""
+
     path: str
     depth: int
     allocated_bytes: int
@@ -121,6 +149,8 @@ class DirectoryRecord:
 
 @dataclass(frozen=True, slots=True)
 class OwnerDirectoryRecord:
+    """Usage attributed to one owner below a recorded directory."""
+
     path: str
     depth: int
     allocated_bytes: int
@@ -132,6 +162,8 @@ class OwnerDirectoryRecord:
 
 @dataclass(frozen=True, slots=True)
 class OwnerRecord:
+    """Snapshot-wide usage attributed to one filesystem owner."""
+
     uid: int
     username: str
     allocated_bytes: int
@@ -143,6 +175,8 @@ class OwnerRecord:
 
 @dataclass(frozen=True, slots=True)
 class FileRecord:
+    """Size, owner, and modification metadata for one large file candidate."""
+
     path: str
     uid: int
     username: str
@@ -153,6 +187,8 @@ class FileRecord:
 
 @dataclass(frozen=True, slots=True)
 class ScanError:
+    """A recoverable filesystem operation failure captured during scanning."""
+
     path: str
     operation: str
     message: str
@@ -160,6 +196,8 @@ class ScanError:
 
 @dataclass(slots=True)
 class DirectoryTotals:
+    """Mutable accumulator used while walking a directory subtree."""
+
     allocated_bytes: int = 0
     apparent_bytes: int = 0
     file_count: int = 0
@@ -168,6 +206,7 @@ class DirectoryTotals:
     latest_modified_epoch: float = 0.0
 
     def add(self, other: DirectoryTotals) -> None:
+        """Merge a child subtree into this accumulator."""
         self.allocated_bytes += other.allocated_bytes
         self.apparent_bytes += other.apparent_bytes
         self.file_count += other.file_count
@@ -180,6 +219,8 @@ class DirectoryTotals:
 
 @dataclass(frozen=True, slots=True)
 class SnapshotSummary:
+    """Complete scan outcome used to finalize snapshot metadata."""
+
     snapshot_id: str
     root: Path
     created_epoch: int
@@ -205,21 +246,27 @@ class SnapshotSummary:
 
 @dataclass(frozen=True, slots=True)
 class DiffRecord:
+    """Allocated bytes for one path at two snapshot points."""
+
     path: str
     previous_bytes: int
     current_bytes: int
 
     @property
     def change_bytes(self) -> int:
+        """Signed current-minus-previous byte change."""
         return self.current_bytes - self.previous_bytes
 
     @property
     def absolute_change_bytes(self) -> int:
+        """Magnitude of the byte change regardless of direction."""
         return abs(self.change_bytes)
 
 
 @dataclass(frozen=True, slots=True)
 class CheckResult:
+    """Observed outcome for one operational threshold check."""
+
     name: str
     passed: bool
     observed: str
@@ -229,6 +276,8 @@ class CheckResult:
 
 @dataclass(frozen=True, slots=True)
 class DoctorItem:
+    """Status and diagnostic detail for one environment check."""
+
     name: str
     status: str
     detail: str
@@ -236,6 +285,8 @@ class DoctorItem:
 
 @dataclass(frozen=True, slots=True)
 class ProfileIndex:
+    """Ordered snapshot history and latest selectors for one profile."""
+
     version: int
     profile: str
     latest_complete: str | None
@@ -243,6 +294,7 @@ class ProfileIndex:
     snapshots: tuple[SnapshotIndexRecord, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, object]:
+        """Return the stable JSON representation stored on disk."""
         return {
             "version": self.version,
             "profile": self.profile,
@@ -253,6 +305,7 @@ class ProfileIndex:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> ProfileIndex:
+        """Decode a profile index while validating its snapshot collection."""
         raw_snapshots = value.get("snapshots", [])
         if not isinstance(raw_snapshots, list):
             raise ValueError("snapshots must be a list")
@@ -277,6 +330,7 @@ class ProfileIndex:
         )
 
     def with_records(self, records: Iterable[SnapshotIndexRecord]) -> ProfileIndex:
+        """Return a chronologically ordered index with latest selectors rebuilt."""
         ordered = tuple(sorted(records, key=lambda item: item.created_epoch))
         latest_any = ordered[-1].snapshot_id if ordered else None
         complete = [record for record in ordered if record.complete]

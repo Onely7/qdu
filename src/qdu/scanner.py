@@ -1,3 +1,5 @@
+"""Walk a filesystem and stream aggregate snapshot data into SQLite."""
+
 from __future__ import annotations
 
 import heapq
@@ -7,10 +9,10 @@ import socket
 import sqlite3
 import stat
 import time
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Iterator
 
 from qdu.errors import UsageError
 from qdu.models import DirectoryTotals, ScanError, SnapshotSummary
@@ -40,6 +42,8 @@ class _Frame:
 
 
 class FilesystemScanner:
+    """Iteratively scan one root while localizing errors and inode deduplication."""
+
     def __init__(
         self,
         connection: sqlite3.Connection,
@@ -64,12 +68,20 @@ class FilesystemScanner:
         self._error_count = 0
         self._large_files: list[tuple[int, str, int, int, float]] = []
         self._owner_total_updates: list[tuple[int, int, int, int, int, int]] = []
-        self._owner_directory_updates: list[tuple[int, str, int, int, int, int, int, int]] = []
+        self._owner_directory_updates: list[
+            tuple[int, str, int, int, int, int, int, int]
+        ] = []
         self._skipped_filesystem_count = 0
         self._skipped_filesystems: list[str] = []
         self._filesystem_paths: dict[int, str] = {}
 
     def scan(self, snapshot_id: str) -> SnapshotSummary:
+        """Populate the open snapshot database and return scan metadata.
+
+        Raises:
+            UsageError: If the root does not exist, is not a directory, or cannot
+                be inspected at all.
+        """
         started = time.time()
         root = self.root.expanduser().resolve()
         if not root.exists():
@@ -101,7 +113,11 @@ class FilesystemScanner:
                             stack[-1].totals.add(current.totals)
                         continue
 
-                    relative_path = entry.name if current.relative_path == "." else f"{current.relative_path}/{entry.name}"
+                    relative_path = (
+                        entry.name
+                        if current.relative_path == "."
+                        else f"{current.relative_path}/{entry.name}"
+                    )
                     if self.matcher.matches(relative_path):
                         continue
                     try:
@@ -109,7 +125,9 @@ class FilesystemScanner:
                     except OSError as exc:
                         self._record_error(relative_path, "stat", exc)
                         continue
-                    is_directory = stat.S_ISDIR(entry_stat.st_mode) and not stat.S_ISLNK(entry_stat.st_mode)
+                    is_directory = stat.S_ISDIR(
+                        entry_stat.st_mode
+                    ) and not stat.S_ISLNK(entry_stat.st_mode)
                     if is_directory and int(entry_stat.st_dev) != root_device:
                         if self.one_file_system:
                             self._record_skipped_filesystem(relative_path)
@@ -118,7 +136,10 @@ class FilesystemScanner:
 
                     if is_directory:
                         child_frame = self._open_frame(
-                            Path(entry.path), relative_path, current.depth + 1, entry_stat
+                            Path(entry.path),
+                            relative_path,
+                            current.depth + 1,
+                            entry_stat,
                         )
                         if child_frame is not None:
                             stack.append(child_frame)
@@ -289,7 +310,9 @@ class FilesystemScanner:
         self._owner_total_updates.append(
             (uid, allocated, apparent, file_count, directory_count, inode_count)
         )
-        for path, depth in _ancestor_directories(relative_container, self.user_max_depth):
+        for path, depth in _ancestor_directories(
+            relative_container, self.user_max_depth
+        ):
             self._owner_directory_updates.append(
                 (
                     uid,
@@ -348,7 +371,6 @@ class FilesystemScanner:
         if item > self._large_files[0]:
             heapq.heapreplace(self._large_files, item)
 
-
     def _register_filesystem(self, device: int, relative_path: str) -> None:
         self._filesystem_paths.setdefault(device, relative_path)
 
@@ -383,7 +405,9 @@ class FilesystemScanner:
             (path, operation, message),
         )
         if len(self._errors) < _MAX_RETAINED_ERRORS:
-            self._errors.append(ScanError(path=path, operation=operation, message=message))
+            self._errors.append(
+                ScanError(path=path, operation=operation, message=message)
+            )
 
 
 def _allocated_bytes(value: os.stat_result) -> int:
@@ -413,6 +437,7 @@ def _ancestor_directories(path: str, max_depth: int) -> Iterable[tuple[str, int]
 
 
 def username_for_uid(uid: int) -> str:
+    """Resolve a UID to a local name, falling back to its decimal form."""
     try:
         return pwd.getpwuid(uid).pw_name
     except KeyError:

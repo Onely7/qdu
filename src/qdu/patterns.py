@@ -1,3 +1,5 @@
+"""Normalize and apply root-relative filesystem exclusion patterns."""
+
 from __future__ import annotations
 
 import fnmatch
@@ -16,7 +18,9 @@ class PathPatternMatcher:
     """
 
     def __init__(self, patterns: tuple[str, ...]) -> None:
-        self._patterns = tuple(self._normalize(pattern) for pattern in patterns if pattern.strip())
+        self._patterns = tuple(
+            self._normalize(pattern) for pattern in patterns if pattern.strip()
+        )
 
     @staticmethod
     def _normalize(pattern: str) -> str:
@@ -27,14 +31,17 @@ class PathPatternMatcher:
 
     @property
     def patterns(self) -> tuple[str, ...]:
+        """Normalized immutable patterns used for matching."""
         return self._patterns
 
     @property
     def digest(self) -> str:
+        """Stable SHA-256 digest used to compare snapshot scan policies."""
         payload = json.dumps(self._patterns, ensure_ascii=False, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def matches(self, relative_path: str) -> bool:
+        """Return whether a normalized root-relative path is excluded."""
         normalized = relative_path.replace("\\", "/").strip("/")
         if not normalized or normalized == ".":
             return False

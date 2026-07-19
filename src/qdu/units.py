@@ -1,3 +1,5 @@
+"""Parse and render byte sizes and human-readable durations."""
+
 from __future__ import annotations
 
 import re
@@ -28,6 +30,11 @@ _DURATION_MULTIPLIERS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 
 def parse_size(value: str) -> int:
+    """Parse a non-negative decimal or binary size into bytes.
+
+    Raises:
+        UsageError: If the value has an unsupported number or unit syntax.
+    """
     match = _SIZE_RE.fullmatch(value.strip())
     if match is None:
         raise UsageError(f"invalid size: {value}")
@@ -36,6 +43,11 @@ def parse_size(value: str) -> int:
 
 
 def parse_duration(value: str) -> int:
+    """Parse a duration with an s, m, h, d, or w suffix into seconds.
+
+    Raises:
+        UsageError: If the duration syntax or suffix is unsupported.
+    """
     match = _DURATION_RE.fullmatch(value.strip())
     if match is None:
         raise UsageError(f"invalid duration: {value}")
@@ -44,6 +56,7 @@ def parse_duration(value: str) -> int:
 
 
 def format_bytes(value: int, *, signed: bool = False) -> str:
+    """Render bytes with an appropriate IEC unit and optional explicit sign."""
     sign = ""
     number = float(value)
     if signed:
@@ -62,6 +75,7 @@ def format_bytes(value: int, *, signed: bool = False) -> str:
 
 
 def format_age(seconds: int) -> str:
+    """Render a duration as compact day, hour, minute, and second parts."""
     if seconds < 0:
         seconds = 0
     parts: list[str] = []
