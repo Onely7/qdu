@@ -1,5 +1,7 @@
 # qdu コマンドリファレンス
 
+[English](COMMAND_REFERENCE_en.md) | 日本語
+
 全コマンドと、各オプションの既定値をまとめています。基本的な使い方は、[README](../README.md)または[分析ガイド](ANALYSIS_GUIDE.md)を参照してください。
 
 ## コマンド一覧

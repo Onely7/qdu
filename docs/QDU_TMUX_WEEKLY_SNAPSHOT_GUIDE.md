@@ -1,5 +1,7 @@
 # tmux を使って qdu を1週間ごとに定期実行する
 
+[English](QDU_TMUX_WEEKLY_SNAPSHOT_GUIDE_en.md) | 日本語
+
 cron や systemd timer を使えない環境でも、`tmux` のセッションを動かし続けられるなら、`qdu snapshot` を1週間ごとに実行できます。
 
 この方法では、次の流れを繰り返します。

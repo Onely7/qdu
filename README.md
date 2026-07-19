@@ -1,5 +1,7 @@
 # qdu
 
+[English](README_en.md) | 日本語
+
 ディスクの空き容量が減ってきた。けれど、どこを片付ければよいのか分からない。
 
 `qdu`（quick `du`）は、そのようなときに使うコマンドラインツールです。名前には、容量の大きな領域でも、保存した情報を使ってディスク使用量を素早く確認できるようにする、という意味を込めています。
@@ -30,7 +32,7 @@ qdu diff       # 前回から増減した場所を確認する
 ## 動作環境
 
 - LinuxまたはmacOS
-- Python 3.10以上
+- Python 3.10〜3.14
 - 追加のPythonパッケージは不要
 
 `qdu browse`を使う場合だけ、別途[`fzf`](https://github.com/junegunn/fzf)が必要です。
@@ -124,6 +126,8 @@ qdu diff --profile project-data
 
 `--profile`を指定しない場合は、`default`プロファイルが使われます。
 
+プロファイル名には英数字、`.`、`_`、`-`だけを使用できます。絶対パス、`..`、パス区切り文字を含む名前は、状態ディレクトリ外へのアクセスを防ぐため拒否されます。
+
 `/home`がautofsで、各ユーザーのホームが別のNFSマウントになっている環境では、別ファイルシステムを含める設定が必要です。
 
 ```bash
@@ -198,6 +202,8 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/qdu/profiles/<profile>/
 | [コマンドリファレンス](docs/COMMAND_REFERENCE.md) | 全コマンドと各オプションの既定値 |
 | [開発者向けガイド](docs/DEVELOPMENT.md) | テスト、ビルド、ベンチマーク、構成 |
 | [tmuxによる週次実行](docs/QDU_TMUX_WEEKLY_SNAPSHOT_GUIDE.md) | cronを使えない環境での定期実行 |
+
+英語版は[English documentation index](docs/README_en.md)から参照できます。
 
 ## コマンド一覧
 

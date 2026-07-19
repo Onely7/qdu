@@ -1,5 +1,7 @@
 # qdu 導入ガイド
 
+[English](GETTING_STARTED_en.md) | 日本語
+
 インストールから最初の差分確認までを説明します。
 
 ## 動作環境
