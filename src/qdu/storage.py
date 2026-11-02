@@ -1,0 +1,471 @@
+"""Persist profile indexes and versioned SQLite snapshot artifacts."""
+
+from __future__ import annotations
+
+import contextlib
+import gzip
+import hashlib
+import json
+import os
+import shutil
+import sqlite3
+import tempfile
+import zlib
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from qdu.config import xdg_state_home
+from qdu.errors import SnapshotFormatError, UsageError, VerificationError
+from qdu.models import ProfileIndex, SnapshotIndexRecord
+from qdu.profile_names import validate_profile_name
+
+INDEX_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 3
+# Schema 2 added a parent column, three unused secondary indexes on
+# directories, and the seen_inodes table. Its tables are otherwise identical,
+# so every query reads both versions.
+READABLE_SNAPSHOT_SCHEMA_VERSIONS = frozenset({2, 3})
+
+
+SCHEMA_SQL = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE directories (
+    path TEXT PRIMARY KEY,
+    depth INTEGER NOT NULL CHECK(depth >= 0),
+    allocated_bytes INTEGER NOT NULL CHECK(allocated_bytes >= 0),
+    apparent_bytes INTEGER NOT NULL CHECK(apparent_bytes >= 0),
+    file_count INTEGER NOT NULL CHECK(file_count >= 0),
+    directory_count INTEGER NOT NULL CHECK(directory_count >= 1),
+    inode_count INTEGER NOT NULL CHECK(inode_count >= 1),
+    latest_modified_epoch REAL NOT NULL CHECK(latest_modified_epoch >= 0)
+) WITHOUT ROWID;
+CREATE TABLE owners (
+    uid INTEGER PRIMARY KEY,
+    allocated_bytes INTEGER NOT NULL CHECK(allocated_bytes >= 0),
+    apparent_bytes INTEGER NOT NULL CHECK(apparent_bytes >= 0),
+    file_count INTEGER NOT NULL CHECK(file_count >= 0),
+    directory_count INTEGER NOT NULL CHECK(directory_count >= 0),
+    inode_count INTEGER NOT NULL CHECK(inode_count >= 0)
+) WITHOUT ROWID;
+CREATE TABLE owner_directories (
+    uid INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    depth INTEGER NOT NULL CHECK(depth >= 0),
+    allocated_bytes INTEGER NOT NULL CHECK(allocated_bytes >= 0),
+    apparent_bytes INTEGER NOT NULL CHECK(apparent_bytes >= 0),
+    file_count INTEGER NOT NULL CHECK(file_count >= 0),
+    directory_count INTEGER NOT NULL CHECK(directory_count >= 0),
+    inode_count INTEGER NOT NULL CHECK(inode_count >= 0),
+    PRIMARY KEY(uid, path)
+) WITHOUT ROWID;
+CREATE TABLE large_files (
+    path TEXT PRIMARY KEY,
+    uid INTEGER NOT NULL,
+    allocated_bytes INTEGER NOT NULL CHECK(allocated_bytes >= 0),
+    apparent_bytes INTEGER NOT NULL CHECK(apparent_bytes >= 0),
+    modified_epoch REAL NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX large_files_allocated_idx ON large_files(allocated_bytes DESC, path);
+CREATE TABLE scan_errors (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    message TEXT NOT NULL
+);
+"""
+
+# Scan-time scratch tables live in SQLite's temporary database, so they never
+# reach the published snapshot file. Directories finish in post-order; staging
+# them and copying them once in path order writes a compact table without the
+# cost of VACUUM.
+SCAN_WORKSPACE_SQL = """
+CREATE TEMP TABLE staged_directories (
+    path TEXT NOT NULL,
+    depth INTEGER NOT NULL,
+    allocated_bytes INTEGER NOT NULL,
+    apparent_bytes INTEGER NOT NULL,
+    file_count INTEGER NOT NULL,
+    directory_count INTEGER NOT NULL,
+    inode_count INTEGER NOT NULL,
+    latest_modified_epoch REAL NOT NULL
+);
+CREATE TEMP TABLE seen_inodes (
+    device INTEGER NOT NULL,
+    inode INTEGER NOT NULL,
+    PRIMARY KEY(device, inode)
+) WITHOUT ROWID;
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class ProfilePaths:
+    """Owner-scoped state paths derived from one validated profile name."""
+
+    profile: str
+    root: Path
+    snapshots: Path
+    index: Path
+    lock: Path
+    temporary: Path
+
+    @classmethod
+    def for_profile(cls, profile: str) -> ProfilePaths:
+        """Derive state paths after validating the profile path component.
+
+        Raises:
+            UsageError: If the profile name contains unsafe path syntax.
+        """
+        profile = validate_profile_name(profile)
+        root = xdg_state_home() / "qdu" / "profiles" / profile
+        return cls(
+            profile=profile,
+            root=root,
+            snapshots=root / "snapshots",
+            index=root / "index.json",
+            lock=root / ".lock",
+            temporary=root / "tmp",
+        )
+
+    def ensure(self) -> None:
+        """Create private profile, snapshot, and temporary directories."""
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.snapshots.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.temporary.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+
+class IndexRepository:
+    """Load and atomically update one versioned profile index."""
+
+    def __init__(self, paths: ProfilePaths) -> None:
+        self.paths = paths
+
+    def load(self) -> ProfileIndex:
+        """Load and validate the index or return an empty current-version index.
+
+        Raises:
+            SnapshotFormatError: If JSON, versions, profile ownership, or snapshot
+                records are invalid.
+        """
+        if not self.paths.index.exists():
+            return ProfileIndex(
+                version=INDEX_VERSION,
+                profile=self.paths.profile,
+                latest_complete=None,
+                latest_any=None,
+                snapshots=(),
+            )
+        try:
+            with self.paths.index.open("r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+            if not isinstance(raw, dict):
+                raise ValueError("index root must be an object")
+            index = ProfileIndex.from_dict(raw)
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise SnapshotFormatError(
+                f"invalid profile index: {self.paths.index}: {exc}"
+            ) from exc
+        if index.version != INDEX_VERSION:
+            raise SnapshotFormatError(
+                f"unsupported profile index version {index.version}; expected {INDEX_VERSION}"
+            )
+        if index.profile != self.paths.profile:
+            raise SnapshotFormatError("profile index belongs to a different profile")
+        return index
+
+    def save(self, index: ProfileIndex) -> None:
+        """Atomically save an index with owner-only file permissions."""
+        self.paths.ensure()
+        temporary = self.paths.index.with_suffix(".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(
+                index.to_dict(), handle, ensure_ascii=False, indent=2, sort_keys=True
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, self.paths.index)
+        _fsync_directory(self.paths.root)
+
+    def add(self, record: SnapshotIndexRecord) -> ProfileIndex:
+        """Insert or replace a record and rebuild latest selectors."""
+        current = self.load()
+        records = [
+            item for item in current.snapshots if item.snapshot_id != record.snapshot_id
+        ]
+        records.append(record)
+        updated = current.with_records(records)
+        self.save(updated)
+        return updated
+
+    def remove(self, snapshot_ids: set[str]) -> ProfileIndex:
+        """Remove selected records and rebuild latest selectors."""
+        current = self.load()
+        updated = current.with_records(
+            item for item in current.snapshots if item.snapshot_id not in snapshot_ids
+        )
+        self.save(updated)
+        return updated
+
+    def resolve(
+        self, selector: str | None, *, include_incomplete: bool = False
+    ) -> SnapshotIndexRecord:
+        """Resolve a reserved selector, exact ID, filename, or unique ID prefix.
+
+        Raises:
+            UsageError: If no matching usable snapshot exists or a prefix is
+                ambiguous.
+        """
+        index = self.load()
+        if not index.snapshots:
+            raise UsageError("no snapshots are available; run 'qdu snapshot' first")
+        normalized = selector or "latest"
+        if normalized == "latest":
+            snapshot_id = index.latest_complete
+            if snapshot_id is None:
+                raise UsageError(
+                    "no complete snapshot is available; use --snapshot latest-any"
+                )
+            return _record_by_id(index.snapshots, snapshot_id)
+        if normalized == "latest-any":
+            if index.latest_any is None:
+                raise UsageError("no snapshot is available")
+            return _record_by_id(index.snapshots, index.latest_any)
+        if normalized == "previous":
+            latest_id = (
+                index.latest_complete if not include_incomplete else index.latest_any
+            )
+            if latest_id is None:
+                raise UsageError("no suitable latest snapshot is available")
+            latest_position = next(
+                position
+                for position, item in enumerate(index.snapshots)
+                if item.snapshot_id == latest_id
+            )
+            candidates = [
+                item
+                for item in index.snapshots[:latest_position]
+                if include_incomplete or item.complete
+            ]
+            if not candidates:
+                raise UsageError("no previous snapshot is available")
+            return candidates[-1]
+        exact = [
+            item
+            for item in index.snapshots
+            if item.snapshot_id == normalized or item.filename == normalized
+        ]
+        if exact:
+            return exact[0]
+        prefix = [
+            item for item in index.snapshots if item.snapshot_id.startswith(normalized)
+        ]
+        if len(prefix) == 1:
+            return prefix[0]
+        if len(prefix) > 1:
+            raise UsageError(f"snapshot selector is ambiguous: {normalized}")
+        raise UsageError(f"snapshot not found: {normalized}")
+
+    def previous_of(self, record: SnapshotIndexRecord) -> SnapshotIndexRecord:
+        """Return the newest complete snapshot before the given record.
+
+        Raises:
+            UsageError: If no earlier complete snapshot exists.
+        """
+        index = self.load()
+        before = []
+        for item in index.snapshots:
+            if item.snapshot_id == record.snapshot_id:
+                break
+            if item.complete:
+                before.append(item)
+        if not before:
+            if sum(item.complete for item in index.snapshots) < 2:
+                raise UsageError(
+                    "a comparison needs two complete snapshots, and this profile "
+                    "has fewer; run 'qdu snapshot' again later"
+                )
+            raise UsageError(f"no complete snapshot exists before {record.snapshot_id}")
+        return before[-1]
+
+
+def _record_by_id(
+    records: Sequence[SnapshotIndexRecord], snapshot_id: str
+) -> SnapshotIndexRecord:
+    for record in records:
+        if record.snapshot_id == snapshot_id:
+            return record
+    raise SnapshotFormatError(f"index references a missing snapshot: {snapshot_id}")
+
+
+def create_snapshot_database(path: Path) -> sqlite3.Connection:
+    """Create an uncommitted snapshot database optimized for bulk population."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    connection = sqlite3.connect(path)
+    connection.execute("PRAGMA journal_mode = OFF")
+    connection.execute("PRAGMA synchronous = OFF")
+    connection.execute("PRAGMA temp_store = FILE")
+    connection.executescript(SCHEMA_SQL + SCAN_WORKSPACE_SQL)
+    connection.execute(
+        "INSERT INTO metadata(key, value) VALUES (?, ?)",
+        ("schema_version", str(SNAPSHOT_SCHEMA_VERSION)),
+    )
+    return connection
+
+
+def publish_staged_directories(connection: sqlite3.Connection) -> None:
+    """Copy staged directory rows into the snapshot in primary-key order."""
+    connection.execute(
+        "INSERT INTO main.directories(path, depth, allocated_bytes, apparent_bytes, "
+        "file_count, directory_count, inode_count, latest_modified_epoch) "
+        "SELECT path, depth, allocated_bytes, apparent_bytes, file_count, "
+        "directory_count, inode_count, latest_modified_epoch "
+        "FROM temp.staged_directories ORDER BY path"
+    )
+    connection.execute("DROP TABLE temp.staged_directories")
+
+
+def open_snapshot_database(path: Path, *, read_only: bool = True) -> sqlite3.Connection:
+    """Open an existing snapshot and optionally enforce query-only access."""
+    mode = "ro" if read_only else "rw"
+    connection = sqlite3.connect(f"file:{path}?mode={mode}", uri=True)
+    connection.row_factory = sqlite3.Row
+    if read_only:
+        connection.execute("PRAGMA query_only = ON")
+    return connection
+
+
+@contextlib.contextmanager
+def materialized_snapshot(
+    paths: ProfilePaths,
+    record: SnapshotIndexRecord,
+) -> Iterator[Path]:
+    """Yield a readable SQLite path, temporarily expanding archived snapshots.
+
+    Yields:
+        The stored database or a temporary decompressed database path.
+
+    Raises:
+        SnapshotFormatError: If the indexed snapshot file is missing.
+    """
+    source = paths.snapshots / record.filename
+    if not source.exists():
+        raise SnapshotFormatError(f"snapshot file is missing: {source}")
+    if not record.archived:
+        yield source
+        return
+    with decompressed_snapshot(source) as temporary_path:
+        yield temporary_path
+
+
+@contextlib.contextmanager
+def decompressed_snapshot(source: Path) -> Iterator[Path]:
+    """Yield a private temporary copy of a gzipped snapshot database.
+
+    The copy lives in the system temporary directory (``$TMPDIR``, usually
+    local) rather than next to the state, which may sit on a slow or nearly
+    full network home directory. It is readable by the owner only and removed
+    on exit.
+    """
+    file_descriptor, temporary_name = tempfile.mkstemp(prefix="qdu-", suffix=".sqlite3")
+    temporary_path = Path(temporary_name)
+    try:
+        try:
+            with (
+                gzip.open(source, "rb") as compressed,
+                os.fdopen(file_descriptor, "wb") as target,
+            ):
+                shutil.copyfileobj(compressed, target, length=1024 * 1024)
+        except (EOFError, zlib.error, gzip.BadGzipFile) as exc:
+            raise SnapshotFormatError(
+                f"cannot decompress snapshot {source.name}: {exc}"
+            ) from exc
+        yield temporary_path
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def sha256_file(path: Path) -> str:
+    """Return the lowercase SHA-256 digest of a file's exact bytes."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def snapshot_metadata(connection: sqlite3.Connection) -> dict[str, str]:
+    """Load all snapshot metadata values into a string mapping."""
+    return {
+        str(row[0]): str(row[1])
+        for row in connection.execute("SELECT key, value FROM metadata")
+    }
+
+
+def validate_database(path: Path) -> dict[str, str]:
+    """Verify SQLite integrity, schema version, and stored row invariants.
+
+    Raises:
+        VerificationError: If the database is unreadable or inconsistent.
+    """
+    try:
+        with contextlib.closing(open_snapshot_database(path)) as connection:
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or str(integrity[0]).lower() != "ok":
+                raise VerificationError(
+                    f"SQLite integrity check failed: {integrity[0] if integrity else 'no result'}"
+                )
+            metadata = snapshot_metadata(connection)
+            version = int(metadata.get("schema_version", "0"))
+            if version not in READABLE_SNAPSHOT_SCHEMA_VERSIONS:
+                supported = ", ".join(
+                    map(str, sorted(READABLE_SNAPSHOT_SCHEMA_VERSIONS))
+                )
+                raise VerificationError(
+                    f"unsupported snapshot schema {version}; expected one of {supported}"
+                )
+            directory_count = connection.execute(
+                "SELECT COUNT(*) FROM directories"
+            ).fetchone()[0]
+            if int(metadata.get("stored_directory_count", "-1")) != directory_count:
+                raise VerificationError(
+                    f"directory count mismatch: metadata={metadata.get('stored_directory_count')} actual={directory_count}"
+                )
+            foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+            if foreign_keys:
+                raise VerificationError(f"foreign-key violations: {len(foreign_keys)}")
+            return metadata
+    except sqlite3.DatabaseError as exc:
+        raise VerificationError(f"cannot read snapshot database: {exc}") from exc
+
+
+def gzip_snapshot(source: Path, destination: Path) -> None:
+    """Atomically gzip a snapshot and synchronize its containing directory."""
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    try:
+        with (
+            source.open("rb") as input_handle,
+            gzip.open(temporary, "wb", compresslevel=6) as output_handle,
+        ):
+            shutil.copyfileobj(input_handle, output_handle, length=1024 * 1024)
+        os.replace(temporary, destination)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    _fsync_directory(destination.parent)
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_DIRECTORY)
+    except (AttributeError, OSError):
+        return
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

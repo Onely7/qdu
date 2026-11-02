@@ -1,0 +1,16 @@
+qdu benchmark: tools/benchmark.sh with its default dataset
+(2,000 directories, 200,000 files), measured on 2026-11-03 on an x86_64
+Linux machine with the tree on a local disk. Elapsed time and peak RSS
+from GNU time.
+
+step                v0.1.0                   development version
+snapshot            5.73 s    50,292 KiB     1.20 s    25,344 KiB
+snapshot file       1,148 KiB                456 KiB
+show                0.19 s    24,576 KiB     0.13 s    23,616 KiB
+show --under        0.19 s    24,292 KiB     0.13 s    23,616 KiB
+files               0.19 s    24,316 KiB     0.12 s    23,616 KiB
+second snapshot     5.71 s    50,880 KiB     1.18 s    25,152 KiB
+diff                0.19 s    24,576 KiB     0.13 s    24,000 KiB
+
+Snapshots include owner statistics (--with-users). Query commands are
+dominated by interpreter startup.

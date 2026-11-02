@@ -1,0 +1,19 @@
+# Install the hooks with `make hooks` (`pre-commit install`).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.3
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      # On every commit: block secrets in the staged changes.
+      - id: gitleaks
+      # `make secrets` and CI: scan every commit in the history.
+      - id: gitleaks
+        alias: gitleaks-history
+        name: Detect hardcoded secrets in the git history
+        entry: gitleaks git --redact --verbose
+        stages: [manual]
