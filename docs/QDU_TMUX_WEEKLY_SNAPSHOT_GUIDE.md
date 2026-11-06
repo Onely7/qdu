@@ -12,10 +12,10 @@ qdu --version
 command -v tmux
 ```
 
-Take one foreground snapshot first and confirm the intended profile, permissions, exclusions, and filesystem scope:
+Take one foreground snapshot first and confirm the intended profile, permissions, exclusions, and filesystem scope. For a profile that does not exist yet, give its directory and settings; the first snapshot keeps them for the loop:
 
 ```bash
-qdu snapshot --profile shared-home
+qdu snapshot --profile shared-home --path /home --cross-filesystems --with-users
 qdu list --profile shared-home
 ```
 
@@ -37,13 +37,14 @@ mkdir -p "$LOG_DIR"
 
 while :; do
     started=$(date -Is)
-    if "$QDU_BIN" snapshot --profile "$PROFILE" --quiet >>"$LOG_FILE" 2>&1; then
-        printf '%s snapshot complete: profile=%s\n' "$started" "$PROFILE" >>"$LOG_FILE"
-    else
-        status=$?
-        printf '%s snapshot failed: profile=%s status=%s\n' \
-            "$started" "$PROFILE" "$status" >>"$LOG_FILE"
-    fi
+    "$QDU_BIN" snapshot --profile "$PROFILE" --quiet >>"$LOG_FILE" 2>&1
+    status=$?
+    case $status in
+        0) outcome="complete" ;;
+        3) outcome="saved but incomplete; see 'qdu errors'" ;;
+        *) outcome="failed with status $status" ;;
+    esac
+    printf '%s snapshot %s: profile=%s\n' "$started" "$outcome" "$PROFILE" >>"$LOG_FILE"
     sleep "$INTERVAL_SECONDS"
 done
 ```
@@ -89,7 +90,7 @@ If the session disappears immediately, run the script in the foreground and insp
 
 - The first run is immediate, not one week later.
 - Scanning all of `/home`, especially across NFS mounts, can be expensive.
-- qdu records only what the ordinary user can read; do not add `sudo` to this loop.
+- qdu records only what the ordinary user can read; do not add `sudo` to this loop. Directories the user may not read are listed by `qdu errors` and do not make a snapshot incomplete.
 - The profile lock prevents overlapping mutations, but repeated busy exits should be fixed by changing the schedule.
 - tmux does not survive a host reboot by itself. Restart the session after reboot or use a supported user service/scheduler.
 - Rotate or otherwise manage the log for long-running use.

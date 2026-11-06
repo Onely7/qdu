@@ -1,20 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "bootstrap-sha": "0f8e175f000cb0ca152e59256510cdba7e0bf955",
-  "release-type": "python",
+  "release-type": "rust",
   "bump-minor-pre-major": true,
   "include-component-in-tag": false,
   "include-v-in-tag": true,
+  "draft": true,
+  "force-tag-creation": true,
   "packages": {
     ".": {
       "package-name": "qdu",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "generic",
-          "path": "src/qdu/_version.py"
-        }
-      ]
+      "changelog-path": "CHANGELOG.md"
     }
   }
 }

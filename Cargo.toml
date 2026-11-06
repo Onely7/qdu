@@ -1,0 +1,35 @@
+[package]
+name = "qdu"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Record disk-usage snapshots and explore where space goes"
+license = "MIT"
+repository = "https://github.com/Onely7/qdu"
+homepage = "https://github.com/Onely7/qdu"
+readme = "README.md"
+keywords = ["disk-usage", "du", "snapshot", "cli", "filesystem"]
+categories = ["command-line-utilities", "filesystem"]
+include = ["/src/**/*.rs", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE"]
+
+[[bin]]
+name = "qdu"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4.6.11"
+flate2 = "1.1.10"
+libc = "0.2.191"
+rayon = "1.12.0"
+regex = "1.13.1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha2 = "0.11.0"
+unicode-width = "0.2.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

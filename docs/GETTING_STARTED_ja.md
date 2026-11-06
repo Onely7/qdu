@@ -6,31 +6,20 @@
 
 ## 動作環境
 
-- LinuxまたはmacOS
-- Python 3.10〜3.15
-- 追加のPythonパッケージは不要
-
-Pythonのバージョンは次のコマンドで確認できます。
-
-```bash
-python3 --version
-```
+- LinuxまたはmacOS（x86_64またはarm64）
+- 実行時に必要なものはありません。qduは単体で動く1つの実行ファイルです
 
 `qdu browse`を使う場合だけ、別途[`fzf`](https://github.com/junegunn/fzf)が必要です。
 
 ## インストール
 
-リリースにはビルド済みの実行ファイル`qdu`を添付しています。ダウンロードする手順は[README](../README_ja.md#インストール)にあります。ソースからビルドする場合は、次の手順に従います。
+ふつうは次のどれかの方法でインストールします。手順は[README](../README_ja.md#インストール)にあります。
 
-#### ビルドして`qdu`を配置する
+- 試すだけなら、インストールせずに`uvx qdu`で動かす
+- 使い続けるなら、`uv tool install qdu`（または`pipx install qdu`、`python3 -m pip install --user qdu`）でインストールする
+- Pythonがない環境では、最新のリリースから実行ファイルをダウンロードする
 
-リポジトリには実行ファイルを含めていません。まずソースから`dist/qdu`をビルドし、一般ユーザーが書き込める`~/.local/bin`へ配置します。
-
-```bash
-make build
-mkdir -p "$HOME/.local/bin"
-install -m 755 ./dist/qdu "$HOME/.local/bin/qdu"
-```
+定期的にスナップショットを取る場合は、`uvx`ではなくインストールしたqduを使ってください。cronには置き場所の変わらない実行ファイルが必要だからです。
 
 インストールできたか確認します。
 
@@ -62,33 +51,27 @@ qdu --version
 qdu doctor
 ```
 
-#### インストールスクリプトを使う
+#### ソースからビルドする
 
-リポジトリのルートで実行します。
-
-```bash
-./install.sh
-```
-
-既定では`~/.local/bin/qdu`へインストールされます。別の場所へ入れる場合は、`QDU_INSTALL_DIR`を指定します。
+ビルドにはRust 1.85以降と、同梱のSQLiteをコンパイルするためのCコンパイラが必要です。リポジトリのルートで実行します。
 
 ```bash
-QDU_INSTALL_DIR="$HOME/bin" ./install.sh
+make build      # cargo build --release
+make install    # target/release/qdu を ~/.local/bin/qdu へコピー
+qdu --version
 ```
 
-#### 配布用の単一実行ファイルをビルドする
+別の場所へインストールする場合は、`PREFIX`を指定します。次の例では`/opt/qdu/bin/qdu`へインストールします。
 
 ```bash
-python3 tools/build_zipapp.py
+make install PREFIX=/opt/qdu
 ```
 
-実行ファイルは次の場所に生成されます。
+リポジトリを取得せずにビルドする場合は、`cargo install`を使います。`~/.cargo/bin`へインストールされます。
 
-```text
-dist/qdu
+```bash
+cargo install --git https://github.com/Onely7/qdu --locked
 ```
-
-仮想環境や`pip install`は必要ありません。
 
 ## まずは3つのコマンドを試す
 
@@ -98,7 +81,13 @@ dist/qdu
 qdu snapshot
 ```
 
-何も指定しない場合は、自分のホームディレクトリを走査します。
+何も指定しない場合は、自分のホームディレクトリを走査します。別のディレクトリを記録する場合は`--path`で指定します。設定もスナップショットもない新しいプロファイルでは、指定したディレクトリと、`--exclude`や`--with-users`などの設定がそのプロファイルに保存されます。次回からは指定しなくても、同じディレクトリを同じ設定で走査します。
+
+```bash
+qdu snapshot --path /data/my-project
+```
+
+設定が保存されたあとに付けた`--with-users`などのオプションは、その回の走査だけに使われます。次回以降も使うには`--save`も付けます。
 
 qduが保存するのは、容量、ファイル数、inode数、取得日時などの情報です。ファイルの内容そのものはコピーしません。
 
@@ -114,7 +103,17 @@ qdu show
 qdu show --max-depth 2 --top 30
 ```
 
-引数なしの`qdu`も`qdu show`と同じ動作です。
+引数なしの`qdu`も`qdu show`と同じ動作です。コマンドを省略してオプションだけを指定した場合も`qdu show`として動きます。`--max-depth`は`-L`、`--top`は`-n`と短く書けるので、次のコマンドは上の例と同じ表示になります。
+
+```bash
+qdu -L 2 -n 30
+```
+
+1つのディレクトリの中を見るには、そのパスを指定します。パスは走査したディレクトリからの相対パスか、その中を指す絶対パスで指定します。
+
+```bash
+qdu show .cache
+```
 
 #### 3. 後でもう一度記録して差分を見る
 
@@ -131,6 +130,12 @@ qdu diff --growth-only
 
 `qdu diff`には完全なスナップショットが2つ以上必要です。
 
+スナップショットごとの容量の推移は`qdu history`で確認できます。
+
+```bash
+qdu history
+```
+
 ## 基本用語
 
 #### スナップショット
@@ -138,6 +143,12 @@ qdu diff --growth-only
 ある時点の容量、ファイル数、inode数、取得日時などを保存したものです。
 
 qduはスナップショットをSQLiteデータベースとしてユーザー領域へ保存します。SQLiteサーバーを起動する必要はありません。
+
+#### 完全なスナップショットと不完全なスナップショット
+
+完全なスナップショットは読む権限のある場所をすべて読み取れたスナップショットです。`latest`は最新の完全なスナップショットを指します。読む権限のないディレクトリがあると`qdu snapshot`は警告を表示しますが、スナップショットは完全なままです。そのディレクトリは合計に含まれず、`qdu errors`で確認できます。
+
+不完全なスナップショットはI/Oエラーなど権限以外の理由で読み取れなかった場所があり、走査し直せば読めるかもしれないデータが欠けたスナップショットです。`latest-any`で確認できますが、最新の完全なスナップショットの代わりにはなりません。
 
 #### プロファイル
 
@@ -151,7 +162,7 @@ shared-home  → /home
 
 `--profile`を指定しない場合は、`default`プロファイルが使われます。
 
-1つのプロファイルは1つの走査ルートに対応します。異なる場所を管理する場合は、プロファイルを分けてください。
+1つのプロファイルは1つの走査ルートに対応します。異なる場所を管理する場合は、プロファイルを分けてください。設定で`path`を指定していないプロファイルは、すでにあるスナップショットと同じディレクトリを走査します。
 
 #### 割り当て済み容量と見かけ上のサイズ
 
@@ -179,11 +190,11 @@ qduではこの上限を**運用上の許容量**として指定できます。O
 複数のルートを扱う場合は、プロファイルを分けてください。
 
 ```bash
-qdu profile add home --path "$HOME"
-qdu profile add data --path /data/my-project
+qdu profile set home --path "$HOME"
+qdu profile set data --path /data/my-project
 
 # /home が autofs で、各ユーザーのホームが別マウントの場合
-qdu profile add shared-home \
+qdu profile set shared-home \
   --path /home \
   --cross-filesystems \
   --with-users
@@ -201,6 +212,14 @@ qdu diff --profile data
 qdu profile list
 qdu profile show data
 ```
+
+すでにあるプロファイルの設定を変えるときも`qdu profile set`を使います。ディレクトリが保存されているプロファイルでは`--path`を省略でき、指定した設定だけが変わります。
+
+```bash
+qdu profile set data --keep-snapshots 60
+```
+
+`qdu profile add`も`qdu profile set`と同じように使えます。
 
 設定だけを削除する場合は、次のように実行します。
 

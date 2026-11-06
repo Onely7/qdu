@@ -1,8 +1,5 @@
 .DS_Store
-.ruff_cache/
-__pycache__/
-*.py[cod]
-dist/
+/target/
+/dist/
 .venv/
-*.egg-info/
-
+__pycache__/

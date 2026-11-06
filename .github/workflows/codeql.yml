@@ -14,7 +14,8 @@ permissions:
 
 jobs:
   analyze:
-    # The main branch ruleset requires the check named "Analyze Python".
+    # The main branch ruleset requires the checks named "Analyze Rust" and
+    # "Analyze Actions".
     name: Analyze ${{ matrix.name }}
     runs-on: ubuntu-latest
     permissions:
@@ -28,8 +29,8 @@ jobs:
         include:
           - language: actions
             name: Actions
-          - language: python
-            name: Python
+          - language: rust
+            name: Rust
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

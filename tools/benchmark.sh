@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Measure elapsed time and peak memory of qdu commands on a generated tree.
 #
-# QDU selects the executable (default: dist/qdu). QDU_BENCH_DIRECTORIES and
-# QDU_BENCH_FILES size the tree (default: 2,000 directories, 200,000 files).
+# QDU selects the executable (default: target/release/qdu, built by
+# `cargo build --release`). QDU_BENCH_DIRECTORIES and QDU_BENCH_FILES size the
+# tree (default: 2,000 directories, 200,000 files).
 set -euo pipefail
 
 PROJECT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-QDU=${QDU:-"$PROJECT_DIR/dist/qdu"}
+QDU=${QDU:-"${CARGO_TARGET_DIR:-$PROJECT_DIR/target}/release/qdu"}
 DIRECTORIES=${QDU_BENCH_DIRECTORIES:-2000}
 FILES=${QDU_BENCH_FILES:-200000}
 WORK_DIR=$(mktemp -d)
@@ -50,7 +51,14 @@ printf 'Dataset: %s directories, %s files\n' "$DIRECTORIES" "$FILES"
 measure snapshot "$QDU" snapshot --path "$WORK_DIR/root" --with-users --quiet
 printf 'snapshot_file=%s KiB\n' "$(du -k "$SNAPSHOTS"/*.sqlite3 | cut -f1)"
 measure show "$QDU" show --max-depth 2 --top 50 --format json >/dev/null
-measure show_under "$QDU" show --under dir-00000 --max-depth 3 --top 50 --format json >/dev/null
+# The Python qdu (0.2.0 and earlier) names the directory with --under, the
+# Rust version as PATH.
+if "$QDU" show --help | grep -q -- '--under'; then
+  scope=(--under dir-00000)
+else
+  scope=(dir-00000)
+fi
+measure show_path "$QDU" show "${scope[@]}" --max-depth 3 --top 50 --format json >/dev/null
 measure files "$QDU" files --top 50 --format json >/dev/null
 python3 - "$WORK_DIR/root" <<'PY'
 import sys

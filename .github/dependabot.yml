@@ -1,6 +1,6 @@
 version: 2
 updates:
-  - package-ecosystem: pip
+  - package-ecosystem: cargo
     directory: "/"
     schedule:
       interval: weekly
@@ -8,8 +8,7 @@ updates:
       time: "09:00"
       timezone: Asia/Tokyo
     groups:
-      python-development-dependencies:
-        dependency-type: development
+      rust-dependencies:
         patterns:
           - "*"
 

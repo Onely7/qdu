@@ -1,19 +1,33 @@
-.PHONY: build test lint format format-check hooks secrets install clean
+.PHONY: build test lint format wheel install bench hooks secrets clean
+
+PREFIX ?= $(HOME)/.local
+TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),target)
+MATURIN ?= uvx maturin
 
 build:
-	python3 tools/build_zipapp.py
+	cargo build --release --locked
 
 test:
-	tests/run_tests.sh
+	cargo test --locked
 
 lint:
-	ruff check .
+	cargo fmt --all -- --check
+	cargo clippy --locked --all-targets -- -D warnings
 
 format:
-	ruff format .
+	cargo fmt --all
 
-format-check:
-	ruff format --check .
+# The PyPI package: a wheel that installs the qdu binary.
+wheel:
+	$(MATURIN) build --release --locked --out dist
+
+install: build
+	install -d "$(PREFIX)/bin"
+	install -m 755 "$(TARGET_DIR)/release/qdu" "$(PREFIX)/bin/qdu"
+	@printf 'Installed qdu to %s\n' "$(PREFIX)/bin/qdu"
+
+bench: build
+	tools/benchmark.sh
 
 hooks:
 	pre-commit install
@@ -21,8 +35,6 @@ hooks:
 secrets:
 	pre-commit run gitleaks-history --hook-stage manual --all-files
 
-install: build
-	./install.sh
-
 clean:
-	rm -rf dist/qdu src/qdu/__pycache__ tests/__pycache__
+	cargo clean
+	rm -rf dist

@@ -4,7 +4,7 @@
 
 cron や systemd timer を使えない環境でも、`tmux` のセッションを動かし続けられるなら、`qdu snapshot` を1週間ごとに実行できます。
 
-この方法では、次の流れを繰り返します。
+この方法では次の流れを繰り返します。
 
 1. `qdu snapshot` を実行する
 2. 実行結果をログへ保存する
@@ -20,7 +20,7 @@ SSH接続やターミナルを閉じても、tmuxセッションが残ってい�
 
 ## 前提
 
-この手順では、次のコマンドを1週間ごとに実行します。
+この手順では次のコマンドを1週間ごとに実行します。
 
 ```bash
 qdu snapshot \
@@ -48,7 +48,19 @@ tmux -V
 `shared-home` が `/home` を対象としており、各ユーザーのホームがNFSなどの別マウントになっている場合は、次のようにプロファイルを設定します。
 
 ```bash
-"$HOME/.local/bin/qdu" profile add shared-home \
+"$HOME/.local/bin/qdu" profile set shared-home \
+  --path /home \
+  --cross-filesystems \
+  --with-users \
+  --user-max-depth 4 \
+  --file-top 2000
+```
+
+`shared-home` がまだない場合は、`profile set` を使う代わりに、最初のスナップショットを前面で取るときにディレクトリと設定を指定して作ることもできます。設定もスナップショットもない新しいプロファイルでは、最初のスナップショットが指定したディレクトリと設定を保存するので、定期実行でも同じ設定を使います。
+
+```bash
+"$HOME/.local/bin/qdu" snapshot \
+  --profile shared-home \
   --path /home \
   --cross-filesystems \
   --with-users \
@@ -130,7 +142,7 @@ while true; do
         printf 'Result: complete snapshot\n'
         ;;
       3)
-        printf 'Result: incomplete snapshot\n'
+        printf 'Result: snapshot saved but incomplete\n'
         printf 'Some paths could not be read. Check them with:\n'
         printf '  qdu errors --profile %s --snapshot latest-any\n' "$PROFILE"
         ;;
@@ -222,7 +234,7 @@ bash -x "$HOME/.local/bin/qdu-weekly-snapshot"
 動作確認が終わったら、`Ctrl+C` で停止してください。
 
 > [!NOTE]
-> `bash -x` は、実行したコマンドを画面に表示するデバッグ用の起動方法です。通常運用では使いません。
+> `bash -x` は実行したコマンドを画面に表示するデバッグ用の起動方法です。通常運用では使いません。
 
 ---
 
@@ -488,7 +500,7 @@ NFSサーバーの応答が遅いと、処理が止まったように見える�
 
 `--cross-filesystems` を有効にしても、アクセス権限が増えるわけではありません。
 
-読み取れない場所がある場合、qduは読めた範囲を不完全なスナップショットとして保存し、終了コード`3`を返します。
+読む権限のない場所は `qdu errors` に表示されますが、それだけではスナップショットは不完全にならず、終了コードは`0`です。権限以外のエラーで読めない場所があると、qduは読めた範囲を不完全なスナップショットとして保存し、終了コード`3`を返します。
 
 ### sudoは使わない
 

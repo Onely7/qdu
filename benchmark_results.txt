@@ -1,16 +1,29 @@
 qdu benchmark: tools/benchmark.sh with its default dataset
 (2,000 directories, 200,000 files), measured on 2026-11-03 on an x86_64
-Linux machine with the tree on a local disk. Elapsed time and peak RSS
-from GNU time.
+Linux machine with the tree on a local disk. Elapsed time and peak RSS from
+GNU time; each figure is the second of two runs.
 
-step                v0.1.0                   development version
-snapshot            5.73 s    50,292 KiB     1.20 s    25,344 KiB
-snapshot file       1,148 KiB                456 KiB
-show                0.19 s    24,576 KiB     0.13 s    23,616 KiB
-show --under        0.19 s    24,292 KiB     0.13 s    23,616 KiB
-files               0.19 s    24,316 KiB     0.12 s    23,616 KiB
-second snapshot     5.71 s    50,880 KiB     1.18 s    25,152 KiB
-diff                0.19 s    24,576 KiB     0.13 s    24,000 KiB
+step                Python 0.2.0             development version (Rust)
+snapshot            1.36 s    25,344 KiB     0.10 s     8,120 KiB
+snapshot file       456 KiB                  616 KiB
+show                0.14 s    24,000 KiB     0.00 s     6,720 KiB
+show PATH           0.13 s    23,616 KiB     0.00 s     6,912 KiB
+files               0.13 s    23,616 KiB     0.00 s     7,104 KiB
+second snapshot     1.31 s    25,344 KiB     0.08 s     8,180 KiB
+diff                0.13 s    24,192 KiB     0.00 s     7,104 KiB
 
-Snapshots include owner statistics (--with-users). Query commands are
-dominated by interpreter startup.
+Snapshots include owner statistics (--with-users) and use the default of 16
+scan threads. "show PATH" ranks one directory; Python 0.2.0 names it with --under. "0.00 s" is below the 10 ms resolution of GNU time. The
+snapshot files differ in size because 1,000 files tie at 8 KiB for the
+largest-file list: Python 0.2.0 keeps the tied files whose paths sort last, short
+paths in this tree, and the Rust version keeps those whose paths sort first.
+
+The Rust version keeps about 200 bytes per directory in memory until the
+snapshot is written, while Python 0.2.0 kept its working data in temporary SQLite
+tables. A tree of 300,000 empty directories took 1.06 s and 64,500 KiB with
+the Rust version, and 6.70 s and 30,144 KiB with Python 0.2.0.
+
+On an NFS mount, a tree of 800 directories with 50 empty files each took
+0.52 s to snapshot with Python 0.2.0 and, with the Rust version, 0.29 s on 1 scan
+thread, 0.07 s on 4, 0.06 s on 16, and 0.05 s on 32 (second of three runs;
+QDU_THREADS sets the count).

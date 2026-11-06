@@ -1,11 +1,13 @@
 # Install the hooks with `make hooks` (`pre-commit install`).
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.3
+  - repo: local
     hooks:
-      - id: ruff-check
-        args: [--fix]
-      - id: ruff-format
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
     hooks:

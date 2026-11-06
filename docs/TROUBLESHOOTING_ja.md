@@ -28,17 +28,29 @@ qdu snapshot
 
 #### `no complete snapshot is available`
 
+これまでに取得したスナップショットはどれも、権限が足りないこととは別の失敗（I/O エラーなど）があって不完全です。最新の不完全な結果と、記録されたエラーを確認します。
+
 ```bash
 qdu show --snapshot latest-any
 qdu errors --snapshot latest-any
 ```
 
+不完全になる原因は、種類が `error` のエラーです。エラーの原因を取り除くか、その場所を除外するか、走査するマウントの範囲を狭めてから、スナップショットを取り直してください。種類が `denied` の場所があっても、スナップショットは不完全になりません。
+
+#### 最新のスナップショットが不完全だという注記が出る
+
+コマンドが最新の完全なスナップショット（`latest`）を読むとき、それより新しい不完全なスナップショットがあると、qdu は標準エラーに注記を出します。新しいほうは `--snapshot latest-any` で読めます。不完全になった理由は `qdu errors` で確認できます。
+
+#### `unknown profile`
+
+指定したプロファイルには設定もスナップショットもありません。メッセージには、既知のプロファイルのうち最も近い名前が示されます。`qdu profile set 名前 --path DIR` でプロファイルを作るか、`qdu snapshot --profile 名前 --path DIR` で最初のスナップショットを取得してください。
+
 #### `profile ... holds snapshots of ...`
 
-qdu は保存済みの履歴を別の走査ルートに流用しません。`qdu doctor` では `Snapshot root` の不一致として表示されます。元の走査ルートを `--path` で指定するか、別のプロファイルを作ります。
+qdu は保存済みの履歴を別の走査ルートに流用しません。1つのプロファイルのスナップショットは、すべて同じディレクトリのものです。このエラーは、`--path` かプロファイルに設定した `path` が、既存のスナップショットとは別のディレクトリを指すときに出ます。設定した `path` が違う場合は、`qdu doctor` でも `Snapshot root` の不一致として表示されます。元の走査ルートを `--path` で指定するか、`qdu profile set 名前 --path 元の走査ルート` で設定を直すか、別のプロファイルを作ります。
 
 ```bash
-qdu profile add another-data --path /another/data
+qdu profile set another-data --path /another/data
 ```
 
 #### `another qdu operation is using this profile`
@@ -53,7 +65,7 @@ qdu profile add another-data --path /another/data
 command -v fzf
 ```
 
-`fzf` がなくても、`qdu show` と `qdu explain` は使用できます。
+`fzf` がなくても、`qdu show PATH` と `qdu diff PATH` は使用できます。
 
 #### `/home` を指定するとすぐに終わって `0B` になる
 
@@ -68,7 +80,7 @@ stat -c 'path=%n device=%d' /home /home/"$USER"
 `/home` と `/home/$USER` のデバイス番号が異なる場合、既定のqduは別ファイルシステムとして読み飛ばします。プロファイルを次のように作成してください。
 
 ```bash
-qdu profile add shared-home \
+qdu profile set shared-home \
   --path /home \
   --cross-filesystems \
   --with-users
@@ -81,6 +93,10 @@ qdu snapshot --profile shared-home
 ```bash
 qdu snapshot --profile home --cross-filesystems
 ```
+
+#### 走査ルートが automount のマウントポイントだという警告が出る
+
+automount のマップは走査で読んだ時点でマウントされているエントリーしか一覧に出しません。そのため、しばらく誰も使っていないホームディレクトリなどがスナップショットから漏れます。[スナップショットと走査](SNAPSHOTS_AND_SCANNING_ja.md)の手順でエントリーを開いてから、スナップショットを取り直してください。
 
 反対に、プロファイルで別ファイルシステムへの走査を有効にしていても、今回だけ境界を越えたくないときは `--one-file-system` を付けます。
 
@@ -99,6 +115,8 @@ qdu snapshot --profile home --one-file-system
 - ハードリンクの重複除外
 - スナップショット取得後の変更
 
+読む権限のないディレクトリは合計に含まれず、`qdu errors` に表示されます。
+
 見かけ上のサイズで比較するには、`--metric apparent` を指定します。
 
 ```bash
@@ -107,6 +125,10 @@ qdu show --metric apparent
 
 #### 深いディレクトリが表示されない
 
-`--max-depth`、`--under`、`--match`、`--min-size` と、取得時の `--record-max-depth` を確認してください。
+表示するディレクトリ（`PATH`）、`--max-depth`、`--match`、`--min-size` と、取得時の `--record-max-depth` を確認してください。
 
 `--record-max-depth` より深い情報は保存されていないため、必要な深さでスナップショットを取り直す必要があります。
+
+#### `cannot read snapshot` または終了コード 4
+
+スナップショットのファイルが壊れているか、SQLite のデータベースではないか、この qdu が読めないスキーマかのどれかです。`qdu verify --all` で該当するファイルを探し、`qdu repair --dry-run` でインデックスをどう作り直すかを確認してください。

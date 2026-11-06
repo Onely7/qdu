@@ -7,29 +7,49 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   test:
-    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    name: ${{ matrix.os }} / Rust
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+      - name: Cache Cargo downloads and builds
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-      - name: Install project
-        run: python -m pip install --disable-pip-version-check -e .
-      - name: Compile Python sources
-        run: python -m compileall -q src tools tests
-      - name: Run test suite
-        run: tests/run_tests.sh
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run tests
+        run: cargo test --locked
+
+  msrv:
+    name: Minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up the Rust version in Cargo.toml
+        run: rustup toolchain install 1.85 --profile minimal
+      - name: Build with the minimum supported Rust
+        run: cargo +1.85 check --locked --all-targets
 
   quality:
     # The main branch ruleset requires this check name.
@@ -44,22 +64,21 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.15"
-          cache: pip
+          python-version: "3.13"
       - name: Install development tools
-        run: python -m pip install --disable-pip-version-check -e '.[dev]'
-      - name: Run Ruff checks
-        run: |
-          ruff check .
-          ruff format --check .
+        run: python -m pip install --disable-pip-version-check pre-commit==4.7.0 maturin==1.16.0
       - name: Run ShellCheck
-        run: shellcheck install.sh tests/run_tests.sh tools/benchmark.sh
+        run: shellcheck tools/benchmark.sh
       - name: Run pre-commit hooks
         run: pre-commit run --all-files --show-diff-on-failure
       - name: Scan the git history for secrets
         run: pre-commit run gitleaks-history --hook-stage manual --all-files
-      - name: Smoke-test zipapp
+      - name: Build the wheel and the source distribution
         run: |
-          python tools/build_zipapp.py
-          ./dist/qdu --version
-
+          maturin build --release --locked --out dist
+          maturin sdist --out dist
+      - name: Install the wheel and run it
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check dist/*.whl
+          "$RUNNER_TEMP/venv/bin/qdu" --version
